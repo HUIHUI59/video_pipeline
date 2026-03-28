@@ -513,6 +513,10 @@ def _run_stage(stage:str, op_servers:list, py_paths:dict, args,
     # 启动 worker
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     jobs = []
+
+    # ── 构建各机器的启动参数 ──────────────────────────────────
+    launch_targets = []   # (sv, cmd, log_path, log_stdout, pid_file)
+    workers_n = args.workers or (2 if stage == "2" else 1 if stage == "3" else 0)
     for sv in op_servers:
         log_path   = f"~/pipeline_{sv.name}{log_suffix}.log"
         log_stdout = log_path + ".stdout"
@@ -533,32 +537,58 @@ def _run_stage(stage:str, op_servers:list, py_paths:dict, args,
                 f"  请确认该机器已挂载共享存储，跳过此机器。")
             continue
 
-        workers = args.workers or (2 if stage == "2" else 1 if stage == "3" else 0)
         if stage == "1":
             cmd = build_cmd_stage1(sv, py_paths[sv.name], args.input_dir,
-                                   output_dir, queue_dir, pid_file, workers, log_path)
+                                   output_dir, queue_dir, pid_file, workers_n, log_path)
         elif stage == "2":
             cmd = build_cmd_stage2(sv, py_paths[sv.name], output_dir,
-                                   clips_dir, queue_dir, pid_file, workers, log_path,
+                                   clips_dir, queue_dir, pid_file, workers_n, log_path,
                                    trim_shots=getattr(args,"trim_shots",10))
         else:
             vsr = getattr(args,"vsr_dir","") or sv.vsr_dir or "~/video-subtitle-remover"
             cmd = build_cmd_stage3(sv, py_paths[sv.name], clips_dir,
-                                   clean_dir, queue_dir, pid_file, workers, log_path,
+                                   clean_dir, queue_dir, pid_file, workers_n, log_path,
                                    vsr_dir=vsr)
 
         console.print(f"\n[bold][{sv.name}][/bold] Stage {stage}:\n  [dim]{cmd}[/dim]")
-        if sv.launch_bg(cmd, log_stdout):
-            log.info(f"[{sv.name}] 等待 PID 文件（最多 30s）...")
-            if wait_for_pid(sv, pid_file, timeout=30):
-                log.info(f"[{sv.name}] Worker 已确认启动 ✅")
-                jobs.append((sv, log_stdout, pid_file))
-                threading.Thread(target=tail_log,
-                                 args=(sv, log_stdout, stop_ev), daemon=True).start()
+        launch_targets.append((sv, cmd, log_path, log_stdout, pid_file))
+
+    # ── 并行启动所有机器，再并行等待 PID ─────────────────────
+    launched: dict[str, tuple] = {}   # name → (sv, log_stdout, pid_file)
+
+    def _launch_one(sv, cmd, log_path, log_stdout, pid_file):
+        if not sv.launch_bg(cmd, log_stdout):
+            return
+        log.info(f"[{sv.name}] 等待 PID 文件（最多 30s）...")
+        if wait_for_pid(sv, pid_file, timeout=30):
+            log.info(f"[{sv.name}] Worker 已确认启动 ✅")
+            launched[sv.name] = (sv, log_stdout, pid_file)
+        else:
+            # 本地进程可能已快速完成（无 pending 任务）：检查进程是否已退出
+            already_done = False
+            if sv.is_local:
+                log_p = os.path.expanduser(log_stdout)
+                if os.path.exists(log_p):
+                    content = open(log_p).read()
+                    if "完成" in content or "done=0" in content or "✅=0" in content:
+                        already_done = True
+            if already_done:
+                log.info(f"[{sv.name}] Worker 已处理完毕（无待处理任务）⏭")
+                launched[sv.name] = (sv, log_stdout, pid_file)
             else:
                 console.print(
                     f"  [bold red][{sv.name}] ❌ 30s 内未见 PID 文件\n"
                     f"  检查日志: {log_stdout}[/bold red]")
+
+    threads = [threading.Thread(target=_launch_one, args=t, daemon=True)
+               for t in launch_targets]
+    for t in threads: t.start()
+    for t in threads: t.join()
+
+    for sv_name, (sv, log_stdout, pid_file) in launched.items():
+        jobs.append((sv, log_stdout, pid_file))
+        threading.Thread(target=tail_log,
+                         args=(sv, log_stdout, stop_ev), daemon=True).start()
 
     if not jobs:
         console.print(f"[red]Stage {stage}：没有服务器启动成功！[/red]"); return False
