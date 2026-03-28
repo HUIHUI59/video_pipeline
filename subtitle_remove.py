@@ -83,37 +83,47 @@ class SubResult:
 
 # PaddlePaddle 在同一 Python 进程内无法二次初始化 libpaddle.so：
 # 第一个 SubtitleRemover 结束后，paddle 的 C++ 侧状态已不可恢复，
-# 第二次 import paddle / paddle.device.set_device 会抛出
+# 第二次 import paddle 会抛出
 # "Can not import paddle core while this file exists: .../libpaddle.so"。
 # 解决方案：每个 clip 单独起一个子进程，子进程退出后 paddle 状态随之消亡。
-_VSR_WORKER = textwrap.dedent("""\
-    import sys, os, shutil, tempfile
-    from pathlib import Path
+#
+# 重要：不通过 sys.argv 传参，而是将值直接嵌入脚本字符串。
+# VSR 的部分依赖（如 backend/tools/train_sttn.py）在模块作用域调用
+# argparse.parse_args()，若 sys.argv 含额外参数会以 exit(2) 退出。
+# 嵌入值 + sys.argv=['vsr_worker'] 可彻底规避此问题。
+def _build_worker_script(vsr_path: str, src: str, dst: str) -> str:
+    return textwrap.dedent(f"""\
+        import sys, os, shutil, tempfile
+        from pathlib import Path
 
-    vsr_dir, src, dst = sys.argv[1], sys.argv[2], sys.argv[3]
-    sys.path.insert(0, vsr_dir)
+        # 清空 sys.argv，防止 VSR 依赖中模块级 argparse.parse_args() 报错退出
+        sys.argv = ['vsr_worker']
+        sys.path.insert(0, {repr(vsr_path)})
 
-    from backend.main import SubtitleRemover
-    import backend.config as vsr_cfg
+        from backend.main import SubtitleRemover
+        import backend.config as vsr_cfg
 
-    tmp_dir = tempfile.mkdtemp(prefix="vsr_")
-    try:
-        tmp_src = str(Path(tmp_dir) / Path(src).name)
-        os.symlink(os.path.abspath(src), tmp_src)
-        vsr_output = str(Path(tmp_dir) / (Path(src).stem + "_no_sub.mp4"))
+        src = {repr(src)}
+        dst = {repr(dst)}
 
-        remover = SubtitleRemover(tmp_src, gui_mode=False)
-        # patch AFTER __init__（init 会 importlib.reload config 重置原始值）
-        vsr_cfg.STTN_SKIP_DETECTION = False
-        remover.run()
+        tmp_dir = tempfile.mkdtemp(prefix="vsr_")
+        try:
+            tmp_src = str(Path(tmp_dir) / Path(src).name)
+            os.symlink(os.path.abspath(src), tmp_src)
+            vsr_output = str(Path(tmp_dir) / (Path(src).stem + "_no_sub.mp4"))
 
-        if not Path(vsr_output).exists():
-            print("VSR_ERROR: no output file", flush=True)
-            sys.exit(1)
-        shutil.move(vsr_output, dst)
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-""")
+            remover = SubtitleRemover(tmp_src, gui_mode=False)
+            # patch AFTER __init__（init 会 importlib.reload config 重置原始值）
+            vsr_cfg.STTN_SKIP_DETECTION = False
+            remover.run()
+
+            if not Path(vsr_output).exists():
+                print("VSR_ERROR: no output file", flush=True)
+                sys.exit(1)
+            shutil.move(vsr_output, dst)
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+    """)
 
 
 def remove_one(src: str, clean_root: str, vsr_dir: str,
@@ -144,11 +154,11 @@ def remove_one(src: str, clean_root: str, vsr_dir: str,
         return res
 
     # 每个 clip 在独立子进程中运行，避免 paddle libpaddle.so 无法二次初始化
+    vsr_path = str(Path(os.path.expanduser(vsr_dir)))
+    worker_code = _build_worker_script(vsr_path, src, dst)
     try:
         proc = subprocess.run(
-            [sys.executable, "-c", _VSR_WORKER,
-             str(Path(os.path.expanduser(vsr_dir))),
-             src, dst],
+            [sys.executable, "-c", worker_code],
             timeout=3600,
         )
         if proc.returncode != 0:
