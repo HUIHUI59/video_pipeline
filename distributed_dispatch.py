@@ -224,11 +224,11 @@ if [ -f {pid_file} ]; then
     rm -f {pid_file}
   fi
 else
-  if pgrep -f "process_videos.py\|scene_split.py\|subtitle_remove.py" > /dev/null 2>&1; then
+  if pgrep -f "process_videos.py\\|scene_split.py\\|subtitle_remove.py" > /dev/null 2>&1; then
     echo "no pid file, pkill fallback"
-    pkill -TERM -f "process_videos.py\|scene_split.py\|subtitle_remove.py" 2>/dev/null || true
+    pkill -TERM -f "process_videos.py\\|scene_split.py\\|subtitle_remove.py" 2>/dev/null || true
     sleep 3
-    pkill -KILL -f "process_videos.py\|scene_split.py\|subtitle_remove.py" 2>/dev/null || true
+    pkill -KILL -f "process_videos.py\\|scene_split.py\\|subtitle_remove.py" 2>/dev/null || true
     pkill -KILL -f ffmpeg 2>/dev/null || true
     echo "fallback done"
   else
@@ -373,7 +373,6 @@ def build_cmd_stage3(server:Server, python:str, clips_dir:str, clean_dir:str,
             f"{python} {script} "
             f"{clips_dir} {clean_dir} "
             f"--vsr-dir {vsr} "
-            f"--conda-env {server.conda_env} "
             f"--workers {workers} "
             f"--log-file {log_path} "
             f"--queue-dir {queue_dir} "
@@ -457,7 +456,7 @@ def _run_stage(stage:str, op_servers:list, py_paths:dict, args,
 
     suffix      = _stage_pid_suffix(stage)
     pid_files   = {n: f"~/pipeline_{n}{suffix}.pid" for n in pid_files_base}
-    log_suffix  = {"":" ","_split":"_split","_subtitle":"_subtitle"}[suffix]
+    log_suffix  = {"":"","_split":"_split","_subtitle":"_subtitle"}[suffix]
 
     output_dir  = args.output_dir
     clips_dir   = str(Path(output_dir) / "clips")
@@ -725,14 +724,18 @@ def main():
     # ── 按阶段依次执行 ──
     stages = ["1","2","3"] if args.stage == "all" else [args.stage]
     deployed = False
+    any_started = False
     for stage in stages:
         stage_labels = {"1":"转码","2":"镜头切分","3":"字幕去除"}
         console.rule(f"[bold cyan]Stage {stage}：{stage_labels[stage]}[/bold cyan]")
-        _run_stage(stage, op_servers, py_paths, args,
-                   pid_files, queue_dir, stop_ev, deployed=deployed)
+        ok = _run_stage(stage, op_servers, py_paths, args,
+                        pid_files, queue_dir, stop_ev, deployed=deployed)
+        if ok:
+            any_started = True
         deployed = True  # 后续阶段无需重复部署
 
-    console.rule("[bold green]所有阶段完成 🎉[/bold green]")
+    if any_started:
+        console.rule("[bold green]所有阶段完成 🎉[/bold green]")
 
 if __name__ == "__main__":
     main()
