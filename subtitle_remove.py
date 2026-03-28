@@ -189,16 +189,22 @@ def scan_videos(root: str) -> list[str]:
 
 def run_queue(queue, clean_root: str, vsr_dir: str, _conda_env: str,
               workers: int, stop_ev):
-    results = []
-    current = {}
-    hb_lock = threading.Lock()
+    """
+    Stage 3 队列主循环。
+    故意使用顺序（单任务）模式而非 ThreadPoolExecutor：
+    PaddlePaddle 在同一进程中连续创建多个 SubtitleRemover 实例时，
+    第二次 paddle 初始化会与第一次的 libpaddle.so 残留状态冲突并报错。
+    顺序处理确保每个任务完全结束、paddle 资源释放后再处理下一个。
+    """
+    results   = []
+    cur_src   = [None]   # 供心跳线程读取当前任务路径
 
     def hb_loop():
         while not stop_ev.is_set():
-            with hb_lock:
-                for src in list(current.values()):
-                    try: queue.heartbeat(src)
-                    except Exception: pass
+            src = cur_src[0]
+            if src:
+                try: queue.heartbeat(src)
+                except Exception: pass
             time.sleep(HEARTBEAT_INTERVAL)
 
     threading.Thread(target=hb_loop, daemon=True).start()
@@ -216,56 +222,36 @@ def run_queue(queue, clean_root: str, vsr_dir: str, _conda_env: str,
                             total=total_now, extra="")
         prog.update(pid, completed=stats.get("done", 0))
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-            pending_futs: dict[concurrent.futures.Future, str] = {}
+        while not stop_ev.is_set():
+            item = queue.claim_next()
+            if item is None:
+                if queue.is_all_done(): break
+                time.sleep(8)
+                continue
 
-            def submit_next():
-                if stop_ev.is_set(): return False
-                item = queue.claim_next()
-                if item is None: return False
-                src, _, idx = item
-                fut = pool.submit(remove_one, src, clean_root,
-                                  vsr_dir, "vsr", queue)
-                pending_futs[fut] = src
-                with hb_lock: current[fut] = src
-                return True
+            src, _, _ = item
+            cur_src[0] = src
 
-            _pending = queue.pending_count()
-            _burst   = max(1, min(workers, _pending // max(workers, 1)))
-            for _ in range(_burst):
-                if not submit_next(): break
+            try:
+                res = remove_one(src, clean_root, vsr_dir, "vsr", queue)
+            except Exception as e:
+                res = SubResult(src_path=src, error=str(e))
+                queue.mark_failed(src, str(e))
+            finally:
+                cur_src[0] = None
 
-            while not stop_ev.is_set():
-                if pending_futs:
-                    done_set, _ = concurrent.futures.wait(
-                        pending_futs, timeout=5,
-                        return_when=concurrent.futures.FIRST_COMPLETED)
-                    for fut in done_set:
-                        src = pending_futs.pop(fut)
-                        with hb_lock: current.pop(fut, None)
-                        try: res = fut.result()
-                        except Exception as e:
-                            res = SubResult(src_path=src, error=str(e))
-                            queue.mark_failed(src, str(e))
-                        results.append(res)
-                        icon = "⏭" if res.skip else ("✅" if res.success else "❌")
-                        log.info(
-                            f"{icon} {Path(res.src_path).name}"
-                            + (f" → {Path(res.dst_path).name}" if res.dst_path else "")
-                            + (f" [{res.duration_s:.0f}s]" if res.duration_s else "")
-                            + (f" ERR:{res.error[:60]}" if res.error else ""))
-                        s2 = queue.stats()
-                        prog.update(pid,
-                                    completed=s2.get("done", 0),
-                                    extra=f"done={s2.get('done',0)} "
-                                          f"pending={s2.get('pending',0)}")
-                        if not stop_ev.is_set(): submit_next()
-
-                if not pending_futs:
-                    if queue.is_all_done(): break
-                    # 暂无任务但其他 worker 还在跑；等待可能的超时重分配
-                    time.sleep(8)
-                    submit_next()
+            results.append(res)
+            icon = "⏭" if res.skip else ("✅" if res.success else "❌")
+            log.info(
+                f"{icon} {Path(res.src_path).name}"
+                + (f" → {Path(res.dst_path).name}" if res.dst_path else "")
+                + (f" [{res.duration_s:.0f}s]" if res.duration_s else "")
+                + (f" ERR:{res.error[:60]}" if res.error else ""))
+            s2 = queue.stats()
+            prog.update(pid,
+                        completed=s2.get("done", 0),
+                        extra=f"done={s2.get('done',0)} "
+                              f"pending={s2.get('pending',0)}")
 
     return results
 
