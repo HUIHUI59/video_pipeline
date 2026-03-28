@@ -183,31 +183,45 @@ def kill_server(server:Server, pid_file:str):
     """
     读 PID 文件 → PGID == PID（process_videos 已 setsid）
     kill -TERM -- -PGID → 整个进程组（Python + 所有 ffmpeg）
-    等待 3s → kill -KILL -- -PGID 兜底
+    等待 3s → kill -KILL -- -PGID 兜底 → 验证进程已死
     """
     cmd = f"""
 if [ -f {pid_file} ]; then
   PID=$(cat {pid_file})
-  echo "TERM → PGID=$PID"
-  kill -TERM -- -$PID 2>/dev/null || true
-  sleep 3
-  if kill -0 $PID 2>/dev/null; then
-    echo "KILL → PGID=$PID"
-    kill -KILL -- -$PID 2>/dev/null || true
+  if ! kill -0 $PID 2>/dev/null; then
+    echo "already stopped (stale pid=$PID)"
+    rm -f {pid_file}
+  else
+    echo "TERM → PGID=$PID"
+    kill -TERM -- -$PID 2>/dev/null || true
+    sleep 3
+    if kill -0 $PID 2>/dev/null; then
+      echo "KILL → PGID=$PID"
+      kill -KILL -- -$PID 2>/dev/null || true
+      sleep 1
+    fi
+    if kill -0 $PID 2>/dev/null; then
+      echo "FAILED: PID=$PID 仍在运行"
+    else
+      echo "✅ 已终止 (pid=$PID)"
+    fi
+    rm -f {pid_file}
   fi
-  rm -f {pid_file}
-  echo "done (pid=$PID)"
 else
-  echo "no pid file, pkill fallback"
-  pkill -TERM -f process_videos.py 2>/dev/null || true
-  sleep 3
-  pkill -KILL -f process_videos.py 2>/dev/null || true
-  pkill -KILL -f ffmpeg 2>/dev/null || true
-  echo "fallback done"
+  if pgrep -f process_videos.py > /dev/null 2>&1; then
+    echo "no pid file, pkill fallback"
+    pkill -TERM -f process_videos.py 2>/dev/null || true
+    sleep 3
+    pkill -KILL -f process_videos.py 2>/dev/null || true
+    pkill -KILL -f ffmpeg 2>/dev/null || true
+    echo "fallback done"
+  else
+    echo "already stopped (no process found)"
+  fi
 fi
 """
     try:
-        r = server.run(cmd.strip(), timeout=20)
+        r = server.run(cmd.strip(), timeout=25)
         console.print(f"  [{server.name}] {r.stdout.strip() or 'done'}")
         if r.returncode != 0:
             log.debug(f"[{server.name}] kill stderr: {r.stderr.strip()}")
@@ -220,9 +234,57 @@ def stop_all(servers:list[Server], pid_files:dict):
                            args=(s, pid_files.get(s.name, f"~/pipeline_{s.name}.pid")),
                            daemon=True) for s in servers]
     for t in ts: t.start()
-    for t in ts: t.join(timeout=25)
-    console.print("[bold green]所有 kill 已发送 ✅[/bold green]")
+    for t in ts: t.join(timeout=30)
+    console.print("[bold green]kill 命令执行完毕[/bold green]")
     console.print("队列状态已保留。重新运行命令即可续传（无需 --resume 参数）。")
+
+def is_worker_alive(server:Server, pid_file:str) -> tuple[bool, str]:
+    """检查 worker 是否在运行。返回 (alive, pid_or_reason)"""
+    cmd = (f"if [ -f {pid_file} ]; then "
+           f"PID=$(cat {pid_file}); "
+           f"if kill -0 $PID 2>/dev/null; then echo \"alive:$PID\"; "
+           f"else echo \"dead:stale_pid\"; fi; "
+           f"else echo \"dead:no_pidfile\"; fi")
+    try:
+        r = server.run(cmd, timeout=10)
+        out = r.stdout.strip()
+        if out.startswith("alive:"):
+            return True, out.split(":", 1)[1]
+        return False, out
+    except Exception as e:
+        return False, str(e)
+
+def status_all(servers:list[Server], pid_files:dict, queue_dir:str=""):
+    console.rule("[bold cyan]📊  系统状态[/bold cyan]")
+    tbl = Table(box=None)
+    tbl.add_column("服务器", style="cyan"); tbl.add_column("状态", style="bold")
+    tbl.add_column("PID"); tbl.add_column("PID文件")
+    for s in servers:
+        pf = pid_files.get(s.name, f"~/pipeline_{s.name}.pid")
+        alive, info = is_worker_alive(s, pf)
+        status = "[green]运行中 ▶[/green]" if alive else "[red]已停止 ■[/red]"
+        pid    = info if alive else "-"
+        tbl.add_row(s.name, status, pid, pf)
+    console.print(tbl)
+    if queue_dir:
+        try:
+            sys.path.insert(0, str(Path(__file__).parent))
+            from task_queue import TaskQueue
+            q = TaskQueue(queue_dir=os.path.expanduser(queue_dir), worker_id="status")
+            s = q.stats()
+            total = sum(s.values())
+            done  = s.get("done", 0)
+            console.print(
+                f"\n  队列: total={total}  "
+                f"[green]done={done}[/green]  "
+                f"[yellow]pending={s.get('pending',0)}[/yellow]  "
+                f"[blue]claimed={s.get('claimed',0)}[/blue]  "
+                f"[red]error={s.get('error',0)}[/red]"
+                + (f"  ({done/total*100:.1f}%)" if total else ""))
+        except Exception as e:
+            console.print(f"  [red]无法读取队列: {e}[/red]")
+    else:
+        console.print("  [dim](提供 --output-dir 可显示队列进度)[/dim]")
 
 # ══════════════════════════════════════════════════════════════
 # 工具
@@ -300,6 +362,7 @@ def main():
     parser.add_argument("--dry-run",  action="store_true")
     parser.add_argument("--check",    action="store_true")
     parser.add_argument("--stop",     action="store_true", help="广播终止所有服务器")
+    parser.add_argument("--status",   action="store_true", help="查看各服务器运行状态和队列进度")
     args = parser.parse_args()
 
     servers = load_servers(args.servers)
@@ -317,7 +380,11 @@ def main():
 
     pid_files = {s.name: f"~/pipeline_{s.name}.pid" for s in alive}
 
-    if args.stop:     stop_all(alive, pid_files); return
+    if args.stop:
+        stop_all(alive, pid_files); return
+    if args.status:
+        qd = str(Path(args.output_dir) / ".queue") if args.output_dir else ""
+        status_all(alive, pid_files, qd); return
     if args.check:    return
     if not alive:     console.print("[red]没有可用服务器！[/red]"); sys.exit(1)
     if not args.input_dir or not args.output_dir:
@@ -349,10 +416,19 @@ def main():
 
     queue_dir = str(Path(args.output_dir) / ".queue")
     q = TaskQueue(queue_dir=queue_dir, worker_id="dispatcher")
+    pre = q.stats()   # 重置前的状态（用于续传提示）
     q.init_queue(src_files=all_videos, start_idx=1, force=args.force)
     s = q.stats()
-    console.print(f"  队列: total={sum(s.values())}  pending={s.get('pending',0)}"
-                  f"  done={s.get('done',0)}  error={s.get('error',0)}")
+    was_resuming = pre.get("done", 0) > 0 or pre.get("error", 0) > 0
+    if was_resuming:
+        reset_count = pre.get("claimed", 0)
+        console.print(
+            f"  [yellow]续传模式[/yellow]: "
+            f"done={s.get('done',0)}  pending={s.get('pending',0)}  "
+            f"error={s.get('error',0)}"
+            + (f"  (已重置 {reset_count} 个中断任务为 pending)" if reset_count else ""))
+    else:
+        console.print(f"  [green]全新开始[/green]: 共 {sum(s.values())} 个任务")
     if s.get("pending",0) == 0 and s.get("claimed",0) == 0:
         console.print("[green]队列无待处理任务，全部完成！[/green]"); return
 
@@ -385,6 +461,15 @@ def main():
         log_path   = f"~/pipeline_{sv.name}.log"
         log_stdout = log_path + ".stdout"
         pid_file   = pid_files[sv.name]
+
+        worker_alive, worker_pid = is_worker_alive(sv, pid_file)
+        if worker_alive:
+            log.info(f"[{sv.name}] Worker 已在运行 (PID={worker_pid})，附加监控日志")
+            jobs.append((sv, log_stdout, pid_file))
+            threading.Thread(target=tail_log,
+                             args=(sv, log_stdout, stop_ev), daemon=True).start()
+            continue
+
         cmd = build_cmd(sv, py_paths[sv.name], args.input_dir, args.output_dir,
                         queue_dir, pid_file, args.workers, log_path)
         console.print(f"\n[bold][{sv.name}][/bold]:\n  [dim]{cmd}[/dim]")
@@ -409,9 +494,15 @@ def main():
         stop_ev.set()
         if choice == "2": stop_all(alive, pid_files)
         else:
-            console.print("[yellow]主控退出，远端继续。\n"
-                          f"终止命令: python distributed_dispatch.py"
-                          f" --servers {args.servers} --stop[/yellow]")
+            console.print(
+                f"[yellow]主控退出，远端继续运行。\n"
+                f"  查看进度 : python distributed_dispatch.py"
+                f" --servers {args.servers} --output-dir {args.output_dir} --status\n"
+                f"  终止远端 : python distributed_dispatch.py"
+                f" --servers {args.servers} --stop\n"
+                f"  重新附加 : python distributed_dispatch.py"
+                f" --input-dir {args.input_dir} --output-dir {args.output_dir}"
+                f" --servers {args.servers}[/yellow]")
         sys.exit(0)
     signal.signal(signal.SIGINT, _sigint)
 
