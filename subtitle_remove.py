@@ -230,7 +230,7 @@ def run_queue(queue, clean_root: str, vsr_dir: str, _conda_env: str,
                 with hb_lock: current[fut] = src
                 return True
 
-            for _ in range(workers): submit_next()
+            submit_next()  # 只认领 1 个，后续完成一个再认领一个，保证多机公平竞争
 
             while not stop_ev.is_set():
                 if pending_futs:
