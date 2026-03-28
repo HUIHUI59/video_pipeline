@@ -17,7 +17,7 @@ kill 方案（问题2修复）：
 ════════════════════════════════════════════════════════════════
 """
 
-import os, sys, json, shutil, signal, logging, argparse
+import os, sys, json, shutil, signal, logging, argparse, atexit
 import subprocess, threading, time
 from pathlib import Path
 from dataclasses import dataclass
@@ -33,6 +33,20 @@ logging.basicConfig(
 )
 log     = logging.getLogger("dispatch")
 console = Console()
+
+def _restore_terminal():
+    """进程退出时恢复终端状态（防止 Rich 退出后终端回显消失）"""
+    try:
+        console.show_cursor(True)
+    except Exception:
+        pass
+    try:
+        subprocess.run(["stty", "sane"], check=False, timeout=2,
+                       stdin=subprocess.DEVNULL, capture_output=True)
+    except Exception:
+        pass
+
+atexit.register(_restore_terminal)
 
 VIDEO_EXTENSIONS = {
     ".mp4",".mkv",".avi",".mov",".wmv",".flv",
@@ -87,6 +101,7 @@ class Server:
                 proc = subprocess.Popen(
                     ["bash","-lc", cmd],
                     stdout=lf, stderr=subprocess.STDOUT,
+                    stdin=subprocess.DEVNULL,   # 不继承终端 stdin，防止 kill 时终端乱码
                     close_fds=True,
                     # 不设 start_new_session：process_videos 自己 setsid()
                 )
@@ -331,7 +346,9 @@ def tail_log(server:Server, log_stdout:str, stop_ev:threading.Event):
                                            f"tail -f {log_stdout}"]
     try:
         proc = subprocess.Popen(full, stdout=subprocess.PIPE,
-                                stderr=subprocess.DEVNULL, text=True)
+                                stderr=subprocess.DEVNULL,
+                                stdin=subprocess.DEVNULL,   # 不继承终端 stdin
+                                text=True)
         while not stop_ev.is_set():
             line = proc.stdout.readline()
             if line: console.print(f"  [dim][{server.name}][/dim] {line.rstrip()}")
@@ -541,6 +558,7 @@ def main():
     def _sigint(sig, frame):
         signal.signal(signal.SIGINT, signal.SIG_DFL)
         stop_ev.set()
+        _restore_terminal()
         console.print(
             "\n[yellow]⚠  主控已退出，worker 继续运行。[/yellow]\n"
             f"  查看进度  →  --status --output-dir <路径>\n"

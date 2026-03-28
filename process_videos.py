@@ -13,7 +13,7 @@ process_videos.py  v5.2
 ════════════════════════════════════════════════════════════════
 """
 
-import os, sys, re, json, time, uuid, signal, socket
+import os, sys, re, json, time, uuid, signal, socket, atexit
 import logging, argparse, threading, subprocess
 import concurrent.futures
 from pathlib import Path
@@ -74,6 +74,20 @@ logging.basicConfig(
 )
 log     = logging.getLogger("pipeline")
 console = Console()
+
+def _restore_terminal():
+    """进程退出时恢复终端状态（防止 Rich 退出后终端回显消失）"""
+    try:
+        console.show_cursor(True)
+    except Exception:
+        pass
+    try:
+        subprocess.run(["stty", "sane"], check=False, timeout=2,
+                       stdin=subprocess.DEVNULL, capture_output=True)
+    except Exception:
+        pass
+
+atexit.register(_restore_terminal)
 
 # ══════════════════════════════════════════════════════════════
 # 数据结构
@@ -446,6 +460,7 @@ def main():
         if args.pid_file:
             try: Path(os.path.expanduser(args.pid_file)).unlink(missing_ok=True)
             except Exception: pass
+        _restore_terminal()
         sys.exit(0)
     signal.signal(signal.SIGINT,  _terminate)
     signal.signal(signal.SIGTERM, _terminate)
