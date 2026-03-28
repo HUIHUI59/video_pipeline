@@ -342,32 +342,34 @@ def run_queue(queue, out_root, gpu_ids, nvenc, workers, stop_ev):
 
             for _ in range(workers): submit_next()
 
-            while pending_futs and not stop_ev.is_set():
-                done_set, _ = concurrent.futures.wait(
-                    pending_futs, timeout=5,
-                    return_when=concurrent.futures.FIRST_COMPLETED)
-                for fut in done_set:
-                    src = pending_futs.pop(fut)
-                    with hb_lock: current.pop(fut, None)
-                    try: res = fut.result()
-                    except Exception as e:
-                        res = JobResult(src_path=src, error=str(e))
-                        queue.mark_failed(src, str(e))
-                    results.append(res)
-                    icon = "⏭" if res.skip else ("✅" if res.success else "❌")
-                    log.info(f"{icon} {Path(res.src_path).name}"
-                             + (f" → {Path(res.dst_path).name}" if res.dst_path else "")
-                             + (f" [{res.duration_s:.0f}s]" if res.duration_s else "")
-                             + (f" ERR:{res.error[:60]}" if res.error else ""))
-                    s2 = queue.stats()
-                    prog.update(pid,
-                                completed=s2.get("done",0),
-                                extra=f"done={s2.get('done',0)} pending={s2.get('pending',0)}")
-                    if not stop_ev.is_set(): submit_next()
+            while not stop_ev.is_set():
+                if pending_futs:
+                    done_set, _ = concurrent.futures.wait(
+                        pending_futs, timeout=5,
+                        return_when=concurrent.futures.FIRST_COMPLETED)
+                    for fut in done_set:
+                        src = pending_futs.pop(fut)
+                        with hb_lock: current.pop(fut, None)
+                        try: res = fut.result()
+                        except Exception as e:
+                            res = JobResult(src_path=src, error=str(e))
+                            queue.mark_failed(src, str(e))
+                        results.append(res)
+                        icon = "⏭" if res.skip else ("✅" if res.success else "❌")
+                        log.info(f"{icon} {Path(res.src_path).name}"
+                                 + (f" → {Path(res.dst_path).name}" if res.dst_path else "")
+                                 + (f" [{res.duration_s:.0f}s]" if res.duration_s else "")
+                                 + (f" ERR:{res.error[:60]}" if res.error else ""))
+                        s2 = queue.stats()
+                        prog.update(pid,
+                                    completed=s2.get("done",0),
+                                    extra=f"done={s2.get('done',0)} pending={s2.get('pending',0)}")
+                        if not stop_ev.is_set(): submit_next()
 
                 if not pending_futs:
                     if queue.is_all_done(): break
-                    time.sleep(8); submit_next()
+                    time.sleep(8)
+                    submit_next()
 
     return results
 
