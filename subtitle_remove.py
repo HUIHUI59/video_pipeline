@@ -13,7 +13,7 @@ VSR: https://github.com/YaoFANGUK/video-subtitle-remover
 ════════════════════════════════════════════════════════════════
 """
 
-import os, sys, time, signal, socket, atexit, shutil, tempfile
+import os, sys, time, signal, socket, atexit, shutil, tempfile, textwrap
 import logging, argparse, threading, subprocess
 import concurrent.futures
 from pathlib import Path
@@ -81,30 +81,39 @@ class SubResult:
 # 单任务：字幕去除
 # ══════════════════════════════════════════════════════════════
 
-def _load_vsr(vsr_dir: str):
-    """将 VSR 路径插入 sys.path 并返回 SubtitleRemover 类（仅导入一次）。"""
-    vsr_path = str(Path(os.path.expanduser(vsr_dir)))
-    if vsr_path not in sys.path:
-        sys.path.insert(0, vsr_path)
-    from backend.main import SubtitleRemover  # noqa: PLC0415
-    return SubtitleRemover
+# PaddlePaddle 在同一 Python 进程内无法二次初始化 libpaddle.so：
+# 第一个 SubtitleRemover 结束后，paddle 的 C++ 侧状态已不可恢复，
+# 第二次 import paddle / paddle.device.set_device 会抛出
+# "Can not import paddle core while this file exists: .../libpaddle.so"。
+# 解决方案：每个 clip 单独起一个子进程，子进程退出后 paddle 状态随之消亡。
+_VSR_WORKER = textwrap.dedent("""\
+    import sys, os, shutil, tempfile
+    from pathlib import Path
 
+    vsr_dir, src, dst = sys.argv[1], sys.argv[2], sys.argv[3]
+    sys.path.insert(0, vsr_dir)
 
-def _patch_vsr_config():
-    """
-    修正 VSR 运行时配置。
-    必须在 SubtitleRemover.__init__() 之后调用（init 会 importlib.reload config，
-    会重置文件中的原始值），run() 之前调用（run 读取 config 属性时使用修正值）。
+    from backend.main import SubtitleRemover
+    import backend.config as vsr_cfg
 
-    关键修正：
-    - STTN_SKIP_DETECTION=False：启用字幕区域检测，避免对整帧画面做 inpaint
-      （默认 True + 未指定 sub_area → 对全屏做 inpaint → 误删人脸/眼睛）
-    """
+    tmp_dir = tempfile.mkdtemp(prefix="vsr_")
     try:
-        import backend.config as vsr_cfg  # noqa: PLC0415
+        tmp_src = str(Path(tmp_dir) / Path(src).name)
+        os.symlink(os.path.abspath(src), tmp_src)
+        vsr_output = str(Path(tmp_dir) / (Path(src).stem + "_no_sub.mp4"))
+
+        remover = SubtitleRemover(tmp_src, gui_mode=False)
+        # patch AFTER __init__（init 会 importlib.reload config 重置原始值）
         vsr_cfg.STTN_SKIP_DETECTION = False
-    except Exception as e:
-        log.warning(f"VSR config patch 失败（影响检测精度）: {e}")
+        remover.run()
+
+        if not Path(vsr_output).exists():
+            print("VSR_ERROR: no output file", flush=True)
+            sys.exit(1)
+        shutil.move(vsr_output, dst)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+""")
 
 
 def remove_one(src: str, clean_root: str, vsr_dir: str,
@@ -134,37 +143,31 @@ def remove_one(src: str, clean_root: str, vsr_dir: str,
         if queue: queue.mark_failed(src, res.error)
         return res
 
-    # VSR 的 SubtitleRemover 总是将结果写到与输入相同的目录下，
-    # 文件名为 {stem}_no_sub.mp4。使用临时目录中转，再移动到目标路径。
-    tmp_dir = None
+    # 每个 clip 在独立子进程中运行，避免 paddle libpaddle.so 无法二次初始化
     try:
-        SubtitleRemover = _load_vsr(vsr_dir)
-
-        tmp_dir = tempfile.mkdtemp(prefix="vsr_")
-        tmp_src = str(Path(tmp_dir) / Path(src).name)
-        # 建立符号链接（避免大文件复制）
-        os.symlink(os.path.abspath(src), tmp_src)
-
-        vsr_output = str(Path(tmp_dir) / f"{Path(src).stem}_no_sub.mp4")
-
-        remover = SubtitleRemover(tmp_src, gui_mode=False)
-        _patch_vsr_config()   # 必须在 init 之后、run 之前
-        remover.run()
-
-        if not Path(vsr_output).exists():
-            res.error = "VSR 未生成输出文件"
+        proc = subprocess.run(
+            [sys.executable, "-c", _VSR_WORKER,
+             str(Path(os.path.expanduser(vsr_dir))),
+             src, dst],
+            timeout=3600,
+        )
+        if proc.returncode != 0:
+            res.error = f"VSR 子进程退出码 {proc.returncode}"
             if queue: queue.mark_failed(src, res.error)
             return res
-
-        shutil.move(vsr_output, dst)
-
+    except subprocess.TimeoutExpired:
+        res.error = "VSR 处理超时（>1h）"
+        if queue: queue.mark_failed(src, res.error)
+        return res
     except Exception as e:
         res.error = str(e)[:400]
         if queue: queue.mark_failed(src, res.error)
         return res
-    finally:
-        if tmp_dir and Path(tmp_dir).exists():
-            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    if not Path(dst).exists() or Path(dst).stat().st_size < 1024:
+        res.error = "VSR 子进程未生成有效输出文件"
+        if queue: queue.mark_failed(src, res.error)
+        return res
 
     res.success    = True
     res.duration_s = time.time() - t0
