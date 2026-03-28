@@ -340,7 +340,12 @@ def run_queue(queue, out_root, gpu_ids, nvenc, workers, stop_ev):
                 with hb_lock: current[fut] = src
                 return True
 
-            submit_next()  # 只认领 1 个，后续完成一个再认领一个，保证多机公平竞争
+            # 自适应初始认领量：任务充足时填满所有 worker 槽位，任务稀少时留给其他机器公平竞争
+            # burst = min(workers, pending // workers)，确保 pending >= workers² 时才全速启动
+            _pending = queue.pending_count()
+            _burst   = max(1, min(workers, _pending // max(workers, 1)))
+            for _ in range(_burst):
+                if not submit_next(): break
 
             while not stop_ev.is_set():
                 if pending_futs:

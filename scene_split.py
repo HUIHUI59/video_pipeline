@@ -198,7 +198,10 @@ def run_queue(queue, clips_root: str, workers: int,
                 with hb_lock: current[fut] = src
                 return True
 
-            submit_next()  # 只认领 1 个，后续完成一个再认领一个，保证多机公平竞争
+            _pending = queue.pending_count()
+            _burst   = max(1, min(workers, _pending // max(workers, 1)))
+            for _ in range(_burst):
+                if not submit_next(): break
 
             while not stop_ev.is_set():
                 if pending_futs:
