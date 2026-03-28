@@ -347,6 +347,26 @@ def wait_done(server:Server, pid_file:str, poll:int=10):
         except Exception: pass
         time.sleep(poll)
 
+def check_queue_access(server:Server, queue_dir:str) -> bool:
+    """检测远端机器是否能看到队列 JSON 文件本身（而不只是父目录）"""
+    queue_file = f"{queue_dir}/.pipeline_queue.json"
+    try:
+        r = server.run(f"[ -f {queue_file} ] && echo ok || echo missing", timeout=10)
+        return "ok" in r.stdout
+    except Exception:
+        return False
+
+def wait_for_pid(server:Server, pid_file:str, timeout:int=30) -> bool:
+    """launch 后轮询 PID 文件，确认 worker 进程真正启动了"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            r = server.run(f"[ -f {pid_file} ] && echo ready || echo waiting", timeout=5)
+            if "ready" in r.stdout: return True
+        except Exception: pass
+        time.sleep(3)
+    return False
+
 # ══════════════════════════════════════════════════════════════
 # main
 # ══════════════════════════════════════════════════════════════
@@ -361,8 +381,10 @@ def main():
     parser.add_argument("--workers",  type=int, default=0)
     parser.add_argument("--dry-run",  action="store_true")
     parser.add_argument("--check",    action="store_true")
-    parser.add_argument("--stop",     action="store_true", help="广播终止所有服务器")
+    parser.add_argument("--stop",     action="store_true", help="终止服务器（可配合 --target）")
     parser.add_argument("--status",   action="store_true", help="查看各服务器运行状态和队列进度")
+    parser.add_argument("--target",   type=str, default="",
+                        help="指定操作的机器名，逗号分隔。例: --target A6000 或 --target A6000,A8000")
     args = parser.parse_args()
 
     servers = load_servers(args.servers)
@@ -380,11 +402,23 @@ def main():
 
     pid_files = {s.name: f"~/pipeline_{s.name}.pid" for s in alive}
 
+    # ── --target 过滤（用于 --stop 和启动）──
+    if args.target:
+        target_set  = {n.strip() for n in args.target.split(",") if n.strip()}
+        not_found   = target_set - {s.name for s in alive}
+        if not_found:
+            console.print(f"  [yellow]⚠ 未找到或不可达: {', '.join(sorted(not_found))}[/yellow]")
+        op_servers = [s for s in alive if s.name in target_set]
+        if not op_servers:
+            console.print("[red]--target 指定的机器均不可用[/red]"); sys.exit(1)
+    else:
+        op_servers = alive
+
     if args.stop:
-        stop_all(alive, pid_files); return
+        stop_all(op_servers, pid_files); return
     if args.status:
         qd = str(Path(args.output_dir) / ".queue") if args.output_dir else ""
-        status_all(alive, pid_files, qd); return
+        status_all(alive, pid_files, qd); return   # status 始终显示所有机器
     if args.check:    return
     if not alive:     console.print("[red]没有可用服务器！[/red]"); sys.exit(1)
     if not args.input_dir or not args.output_dir:
@@ -393,17 +427,17 @@ def main():
     # ── git pull ──
     if args.git_pull:
         console.print("\n[bold]Git 版本同步...[/bold]")
-        for s in alive: git_pull(s)
+        for s in op_servers: git_pull(s)
 
     # ── python 路径 ──
     console.print("\n[bold]探测 python 路径...[/bold]")
     py_paths:dict[str,str] = {}
-    for s in alive:
+    for s in op_servers:
         p = find_python(s)
         if p: py_paths[s.name] = p
         else: console.print(f"  [red][{s.name}] 跳过[/red]")
-    alive = [s for s in alive if s.name in py_paths]
-    if not alive:
+    op_servers = [s for s in op_servers if s.name in py_paths]
+    if not op_servers:
         console.print("[red]所有服务器都找不到 python！[/red]"); sys.exit(1)
 
     # ── 初始化队列 ──
@@ -419,16 +453,22 @@ def main():
     pre = q.stats()   # 重置前的状态（用于续传提示）
     q.init_queue(src_files=all_videos, start_idx=1, force=args.force)
     s = q.stats()
+    total_in_dir = len(all_videos)
+    total_in_q   = sum(s.values())
+    done_cnt     = s.get("done", 0)
+    pct          = f"{done_cnt/total_in_q*100:.1f}%" if total_in_q else "0%"
     was_resuming = pre.get("done", 0) > 0 or pre.get("error", 0) > 0
+    console.print(f"\n  输入目录视频总数 : [bold]{total_in_dir}[/bold]")
     if was_resuming:
         reset_count = pre.get("claimed", 0)
         console.print(
-            f"  [yellow]续传模式[/yellow]: "
-            f"done={s.get('done',0)}  pending={s.get('pending',0)}  "
-            f"error={s.get('error',0)}"
-            + (f"  (已重置 {reset_count} 个中断任务为 pending)" if reset_count else ""))
+            f"  [yellow]续传模式[/yellow] : "
+            f"[green]done={done_cnt}[/green] ({pct})  "
+            f"[yellow]pending={s.get('pending',0)}[/yellow]  "
+            f"[red]error={s.get('error',0)}[/red]"
+            + (f"  (已重置 {reset_count} 个中断任务)" if reset_count else ""))
     else:
-        console.print(f"  [green]全新开始[/green]: 共 {sum(s.values())} 个任务")
+        console.print(f"  [green]全新开始[/green] : 共 {total_in_q} 个任务")
     if s.get("pending",0) == 0 and s.get("claimed",0) == 0:
         console.print("[green]队列无待处理任务，全部完成！[/green]"); return
 
@@ -436,7 +476,7 @@ def main():
     tbl = Table(title="参与服务器（动态抢队列）", box=None)
     tbl.add_column("服务器",style="cyan"); tbl.add_column("GPU",style="yellow")
     tbl.add_column("并发",style="bold"); tbl.add_column("权重",style="dim")
-    for sv in alive:
+    for sv in op_servers:
         tbl.add_row(sv.name, str(sv.gpus), str(args.workers or "auto(3)"), str(sv.weight))
     console.print(tbl)
 
@@ -447,7 +487,7 @@ def main():
         console.print("\n[bold]部署脚本...[/bold]")
         local_pv = str(Path(__file__).parent / "process_videos.py")
         local_tq = str(Path(__file__).parent / "task_queue.py")
-        for sv in alive:
+        for sv in op_servers:
             deploy_script(sv, local_pv)
             sv.upload(local_tq, str(Path(sv.remote_script).parent / "task_queue.py"))
             log.info(f"[{sv.name}] task_queue.py ✅")
@@ -457,7 +497,7 @@ def main():
     stop_ev = threading.Event()
     jobs    = []
 
-    for sv in alive:
+    for sv in op_servers:
         log_path   = f"~/pipeline_{sv.name}.log"
         log_stdout = log_path + ".stdout"
         pid_file   = pid_files[sv.name]
@@ -470,53 +510,72 @@ def main():
                              args=(sv, log_stdout, stop_ev), daemon=True).start()
             continue
 
+        if not check_queue_access(sv, queue_dir):
+            console.print(
+                f"\n  [bold red][{sv.name}] ⚠ 队列文件不可访问[/bold red]\n"
+                f"  路径: {queue_dir}/.pipeline_queue.json\n"
+                f"  该机器上 /mnt/movies/Films/output 可能是本地空目录而非 NAS 挂载点。\n"
+                f"  请在 {sv.name} 上挂载共享存储后重试，跳过此机器。")
+            continue
+
         cmd = build_cmd(sv, py_paths[sv.name], args.input_dir, args.output_dir,
                         queue_dir, pid_file, args.workers, log_path)
         console.print(f"\n[bold][{sv.name}][/bold]:\n  [dim]{cmd}[/dim]")
         if sv.launch_bg(cmd, log_stdout):
-            jobs.append((sv, log_stdout, pid_file))
-            threading.Thread(target=tail_log,
-                             args=(sv, log_stdout, stop_ev), daemon=True).start()
+            log.info(f"[{sv.name}] 等待 worker 写入 PID 文件（最多 30s）...")
+            if wait_for_pid(sv, pid_file, timeout=30):
+                log.info(f"[{sv.name}] Worker 已确认启动 ✅")
+                jobs.append((sv, log_stdout, pid_file))
+                threading.Thread(target=tail_log,
+                                 args=(sv, log_stdout, stop_ev), daemon=True).start()
+            else:
+                console.print(
+                    f"  [bold red][{sv.name}] ❌ 30s 内未见 PID 文件，worker 可能启动失败\n"
+                    f"  检查日志: {log_stdout}[/bold red]")
 
     if not jobs:
         console.print("[red]没有服务器启动成功！[/red]"); sys.exit(1)
 
-    # ── Ctrl+C ──
+    # ── Ctrl+C：直接退出主控，远端继续跑 ──
+    sv_names = ",".join(s.name for s in op_servers)
     def _sigint(sig, frame):
-        console.print(
-            "\n[yellow]⚠  Ctrl+C\n"
-            "   [1] 仅退出主控（远端继续跑）\n"
-            "   [2] 广播终止所有服务器\n"
-            "   输入 1 或 2：[/yellow]", end="")
         signal.signal(signal.SIGINT, signal.SIG_DFL)
-        try: choice = input().strip()
-        except Exception: choice = "1"
         stop_ev.set()
-        if choice == "2": stop_all(alive, pid_files)
-        else:
-            console.print(
-                f"[yellow]主控退出，远端继续运行。\n"
-                f"  查看进度 : python distributed_dispatch.py"
-                f" --servers {args.servers} --output-dir {args.output_dir} --status\n"
-                f"  终止远端 : python distributed_dispatch.py"
-                f" --servers {args.servers} --stop\n"
-                f"  重新附加 : python distributed_dispatch.py"
-                f" --input-dir {args.input_dir} --output-dir {args.output_dir}"
-                f" --servers {args.servers}[/yellow]")
+        console.print(
+            "\n[yellow]⚠  主控已退出，worker 继续运行。[/yellow]\n"
+            f"  查看进度  →  --status --output-dir <路径>\n"
+            f"  停止全部  →  --stop\n"
+            f"  停止单台  →  --stop --target [bold]{sv_names.split(',')[0]}[/bold]\n"
+            f"  继续监控  →  重新运行原命令（已运行的 worker 不会重复启动）")
         sys.exit(0)
     signal.signal(signal.SIGINT, _sigint)
 
     console.print(
-        f"\n[bold]等待完成...[/bold]\n"
-        f"  Ctrl+C 选择退出/终止\n"
-        f"  终止: python distributed_dispatch.py --servers {args.servers} --stop")
+        f"\n[bold]等待完成...[/bold]  (每 30s 刷新进度)\n"
+        f"  Ctrl+C → 主控退出（worker 继续）\n"
+        f"  停止全部 → --stop  |  停止单台 → --stop --target {sv_names.split(',')[0]}")
     wts = []
     for sv,_,pf in jobs:
         t = threading.Thread(
             target=lambda s=sv,p=pf: (wait_done(s,p), log.info(f"[{s.name}] ✅ 完成")),
             daemon=True)
         t.start(); wts.append(t)
-    for t in wts: t.join()
+
+    while any(t.is_alive() for t in wts):
+        for t in wts:
+            t.join(timeout=30)
+        s2    = q.stats()
+        tot2  = sum(s2.values())
+        done2 = s2.get("done", 0)
+        pct2  = f"{done2/tot2*100:.1f}%" if tot2 else "0%"
+        console.print(
+            f"  [dim]{time.strftime('%H:%M:%S')}[/dim]  "
+            f"进度 [bold]{pct2}[/bold]  "
+            f"[green]done={done2}[/green]  "
+            f"[yellow]pending={s2.get('pending',0)}[/yellow]  "
+            f"[blue]claimed={s2.get('claimed',0)}[/blue]  "
+            f"[red]error={s2.get('error',0)}[/red]")
+
     stop_ev.set()
     console.rule("[bold green]所有服务器完成 🎉[/bold green]")
 
