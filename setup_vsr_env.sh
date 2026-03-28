@@ -111,6 +111,39 @@ echo ""
 echo "=== [6/6] 安装 Pipeline 依赖 ==="
 pip install "rich>=13.0" pyyaml "scenedetect[opencv]"
 
+# ── 修正 VSR 默认配置（画质 & 检测精度）────────────
+echo ""
+echo "=== [补丁] 修正 VSR 配置 ==="
+
+# 1. 启用字幕检测（默认 True 时跳过检测，对整帧 inpaint，会误删人脸/眼睛）
+sed -i 's/^STTN_SKIP_DETECTION = True/STTN_SKIP_DETECTION = False/' \
+    "$VSR_DIR/backend/config.py"
+echo "  STTN_SKIP_DETECTION → False（启用字幕区域检测）"
+
+# 2. 中间临时文件改用 MJPG（帧内压缩，避免 mp4v 跨帧压缩损失）
+sed -i "s/NamedTemporaryFile(suffix='.mp4', delete=False)/NamedTemporaryFile(suffix='.avi', delete=False)/" \
+    "$VSR_DIR/backend/main.py"
+sed -i "s/VideoWriter_fourcc(\*'mp4v')/VideoWriter_fourcc(*'MJPG')/" \
+    "$VSR_DIR/backend/main.py"
+echo "  VideoWriter: mp4v → MJPG（帧内压缩，画质更好）"
+
+# 3. ffmpeg 最终编码加入高质量参数（CRF 17 替代默认 CRF 23）
+export _VSR_MAIN="$VSR_DIR/backend/main.py"
+python3 - <<'PYEOF'
+import os, pathlib
+p = pathlib.Path(os.environ["_VSR_MAIN"])
+src = p.read_text()
+old = '"-vcodec", "libx264" if config.USE_H264 else "copy",'
+new = '"-vcodec", "libx264", "-crf", "17", "-preset", "medium", "-pix_fmt", "yuv420p",'
+if old in src:
+    p.write_text(src.replace(old, new))
+    print("  ffmpeg 编码: 添加 -crf 17 -preset medium（高画质输出）")
+elif new in src:
+    print("  ffmpeg 编码: 已是高质量配置，跳过")
+else:
+    print("  ⚠ ffmpeg 编码行未找到，请手动检查 backend/main.py")
+PYEOF
+
 # ── 验证 ──────────────────────────────────────────
 echo ""
 echo "================================================"

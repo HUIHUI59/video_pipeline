@@ -90,6 +90,23 @@ def _load_vsr(vsr_dir: str):
     return SubtitleRemover
 
 
+def _patch_vsr_config():
+    """
+    修正 VSR 运行时配置。
+    必须在 SubtitleRemover.__init__() 之后调用（init 会 importlib.reload config，
+    会重置文件中的原始值），run() 之前调用（run 读取 config 属性时使用修正值）。
+
+    关键修正：
+    - STTN_SKIP_DETECTION=False：启用字幕区域检测，避免对整帧画面做 inpaint
+      （默认 True + 未指定 sub_area → 对全屏做 inpaint → 误删人脸/眼睛）
+    """
+    try:
+        import backend.config as vsr_cfg  # noqa: PLC0415
+        vsr_cfg.STTN_SKIP_DETECTION = False
+    except Exception as e:
+        log.warning(f"VSR config patch 失败（影响检测精度）: {e}")
+
+
 def remove_one(src: str, clean_root: str, vsr_dir: str,
                conda_env: str = "vsr",
                queue=None) -> SubResult:
@@ -131,6 +148,7 @@ def remove_one(src: str, clean_root: str, vsr_dir: str,
         vsr_output = str(Path(tmp_dir) / f"{Path(src).stem}_no_sub.mp4")
 
         remover = SubtitleRemover(tmp_src, gui_mode=False)
+        _patch_vsr_config()   # 必须在 init 之后、run 之前
         remover.run()
 
         if not Path(vsr_output).exists():
