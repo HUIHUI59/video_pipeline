@@ -1,0 +1,1 @@
+python distributed_dispatch.py --servers servers.yaml --stop
