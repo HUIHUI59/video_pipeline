@@ -17,16 +17,15 @@ from typing import Optional
 
 log = logging.getLogger("queue")
 
-QUEUE_FILE        = ".pipeline_queue.json"
-LOCK_FILE         = ".pipeline_queue.lock"
 HEARTBEAT_TIMEOUT = 600   # 秒：claimed 超过此时间无心跳，视为死亡
 
 
 class TaskQueue:
-    def __init__(self, queue_dir: str, worker_id: str = ""):
+    def __init__(self, queue_dir: str, worker_id: str = "",
+                 queue_name: str = "pipeline_queue"):
         self.queue_dir  = Path(queue_dir)
-        self.queue_file = self.queue_dir / QUEUE_FILE
-        self.lock_file  = self.queue_dir / LOCK_FILE
+        self.queue_file = self.queue_dir / f"{queue_name}.json"
+        self.lock_file  = self.queue_dir / f"{queue_name}.lock"
         self.worker_id  = worker_id or socket.gethostname()
         self._lock_fd   = None
 

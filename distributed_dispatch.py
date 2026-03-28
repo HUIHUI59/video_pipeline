@@ -66,7 +66,7 @@ CONDA_SEARCH = [
 class Server:
     name:str; host:str; port:int; user:str; ssh_key:str
     gpus:list; weight:float; conda_env:str; remote_script:str
-    git_repo:str = ""
+    git_repo:str = ""; vsr_dir:str = ""
 
     @property
     def is_local(self): return self.host in ("localhost","127.0.0.1")
@@ -145,6 +145,7 @@ def load_servers(yaml_path:str) -> list[Server]:
         conda_env=s.get("conda_env","base"),
         remote_script=s.get("remote_script","~/video_pipeline/process_videos.py"),
         git_repo=s.get("git_repo",""),
+        vsr_dir=s.get("vsr_dir",""),
     ) for s in raw]
 
 # ══════════════════════════════════════════════════════════════
@@ -223,11 +224,11 @@ if [ -f {pid_file} ]; then
     rm -f {pid_file}
   fi
 else
-  if pgrep -f process_videos.py > /dev/null 2>&1; then
+  if pgrep -f "process_videos.py\|scene_split.py\|subtitle_remove.py" > /dev/null 2>&1; then
     echo "no pid file, pkill fallback"
-    pkill -TERM -f process_videos.py 2>/dev/null || true
+    pkill -TERM -f "process_videos.py\|scene_split.py\|subtitle_remove.py" 2>/dev/null || true
     sleep 3
-    pkill -KILL -f process_videos.py 2>/dev/null || true
+    pkill -KILL -f "process_videos.py\|scene_split.py\|subtitle_remove.py" 2>/dev/null || true
     pkill -KILL -f ffmpeg 2>/dev/null || true
     echo "fallback done"
   else
@@ -285,17 +286,26 @@ def status_all(servers:list[Server], pid_files:dict, queue_dir:str=""):
         try:
             sys.path.insert(0, str(Path(__file__).parent))
             from task_queue import TaskQueue
-            q = TaskQueue(queue_dir=os.path.expanduser(queue_dir), worker_id="status")
-            s = q.stats()
-            total = sum(s.values())
-            done  = s.get("done", 0)
-            console.print(
-                f"\n  队列: total={total}  "
-                f"[green]done={done}[/green]  "
-                f"[yellow]pending={s.get('pending',0)}[/yellow]  "
-                f"[blue]claimed={s.get('claimed',0)}[/blue]  "
-                f"[red]error={s.get('error',0)}[/red]"
-                + (f"  ({done/total*100:.1f}%)" if total else ""))
+            stage_labels = [
+                ("pipeline_queue", "Stage1 转码"),
+                ("split_queue",    "Stage2 切分"),
+                ("subtitle_queue", "Stage3 字幕"),
+            ]
+            for qname, label in stage_labels:
+                qfile = Path(os.path.expanduser(queue_dir)) / f"{qname}.json"
+                if not qfile.exists(): continue
+                q = TaskQueue(queue_dir=os.path.expanduser(queue_dir),
+                              worker_id="status", queue_name=qname)
+                s     = q.stats()
+                total = sum(s.values())
+                done  = s.get("done", 0)
+                console.print(
+                    f"\n  [bold]{label}[/bold]: total={total}  "
+                    f"[green]done={done}[/green]  "
+                    f"[yellow]pending={s.get('pending',0)}[/yellow]  "
+                    f"[blue]claimed={s.get('claimed',0)}[/blue]  "
+                    f"[red]error={s.get('error',0)}[/red]"
+                    + (f"  ({done/total*100:.1f}%)" if total else ""))
         except Exception as e:
             console.print(f"  [red]无法读取队列: {e}[/red]")
     else:
@@ -325,8 +335,8 @@ def deploy_script(server:Server, local:str):
     server.upload(local, server.remote_script)
     log.info(f"[{server.name}] 脚本部署 ✅")
 
-def build_cmd(server:Server, python:str, input_dir:str, output_dir:str,
-              queue_dir:str, pid_file:str, workers:int, log_path:str) -> str:
+def build_cmd_stage1(server:Server, python:str, input_dir:str, output_dir:str,
+                     queue_dir:str, pid_file:str, workers:int, log_path:str) -> str:
     gpus = ",".join(str(g) for g in server.gpus)
     sdir = str(Path(server.remote_script).parent)
     return (f"PYTHONPATH={sdir}:$PYTHONPATH "
@@ -337,6 +347,41 @@ def build_cmd(server:Server, python:str, input_dir:str, output_dir:str,
             f"--queue-dir {queue_dir} "
             f"--worker-id {server.name} "
             f"--pid-file {pid_file}")
+
+def build_cmd_stage2(server:Server, python:str, input_dir:str, clips_dir:str,
+                     queue_dir:str, pid_file:str, workers:int, log_path:str,
+                     trim_shots:int=10) -> str:
+    script = str(Path(server.remote_script).parent / "scene_split.py")
+    sdir   = str(Path(server.remote_script).parent)
+    return (f"PYTHONPATH={sdir}:$PYTHONPATH "
+            f"{python} {script} "
+            f"{input_dir} {clips_dir} "
+            f"--workers {workers} "
+            f"--trim-shots {trim_shots} "
+            f"--log-file {log_path} "
+            f"--queue-dir {queue_dir} "
+            f"--worker-id {server.name} "
+            f"--pid-file {pid_file}")
+
+def build_cmd_stage3(server:Server, python:str, clips_dir:str, clean_dir:str,
+                     queue_dir:str, pid_file:str, workers:int, log_path:str,
+                     vsr_dir:str="") -> str:
+    script  = str(Path(server.remote_script).parent / "subtitle_remove.py")
+    sdir    = str(Path(server.remote_script).parent)
+    vsr     = vsr_dir or server.vsr_dir or "~/video-subtitle-remover"
+    return (f"PYTHONPATH={sdir}:$PYTHONPATH "
+            f"{python} {script} "
+            f"{clips_dir} {clean_dir} "
+            f"--vsr-dir {vsr} "
+            f"--conda-env {server.conda_env} "
+            f"--workers {workers} "
+            f"--log-file {log_path} "
+            f"--queue-dir {queue_dir} "
+            f"--worker-id {server.name} "
+            f"--pid-file {pid_file}")
+
+# backward compat alias
+build_cmd = build_cmd_stage1
 
 def tail_log(server:Server, log_stdout:str, stop_ev:threading.Event):
     if server.is_local:
@@ -364,9 +409,10 @@ def wait_done(server:Server, pid_file:str, poll:int=10):
         except Exception: pass
         time.sleep(poll)
 
-def check_queue_access(server:Server, queue_dir:str) -> bool:
+def check_queue_access(server:Server, queue_dir:str,
+                       queue_name:str="pipeline_queue") -> bool:
     """检测远端机器是否能看到队列 JSON 文件本身（而不只是父目录）"""
-    queue_file = f"{queue_dir}/.pipeline_queue.json"
+    queue_file = f"{queue_dir}/{queue_name}.json"
     try:
         r = server.run(f"[ -f {queue_file} ] && echo ok || echo missing", timeout=10)
         return "ok" in r.stdout
@@ -388,26 +434,194 @@ def wait_for_pid(server:Server, pid_file:str, timeout:int=30) -> bool:
 # main
 # ══════════════════════════════════════════════════════════════
 
+def _stage_pid_suffix(stage:str) -> str:
+    return {"1":"","2":"_split","3":"_subtitle"}.get(stage,"")
+
+def _scan_stage_input(stage:str, input_dir:str, output_dir:str) -> list[str]:
+    """根据阶段返回待处理文件列表"""
+    if stage == "1":
+        return scan_videos(input_dir)
+    elif stage == "2":
+        # Stage 2 输入：Stage 1 输出目录根层级的 .mp4（不递归进 clips/clean）
+        return sorted(str(p) for p in Path(output_dir).glob("*.mp4"))
+    elif stage == "3":
+        # Stage 3 输入：clips 目录下所有 .mp4（递归）
+        clips_dir = str(Path(output_dir) / "clips")
+        return sorted(str(p) for p in Path(clips_dir).rglob("*.mp4"))
+    return []
+
+def _run_stage(stage:str, op_servers:list, py_paths:dict, args,
+               pid_files_base:dict, queue_dir:str, stop_ev, deployed:bool=False):
+    """启动单个阶段的 worker 并等待完成。返回是否有 job 在跑。"""
+    from task_queue import TaskQueue
+
+    suffix      = _stage_pid_suffix(stage)
+    pid_files   = {n: f"~/pipeline_{n}{suffix}.pid" for n in pid_files_base}
+    log_suffix  = {"":" ","_split":"_split","_subtitle":"_subtitle"}[suffix]
+
+    output_dir  = args.output_dir
+    clips_dir   = str(Path(output_dir) / "clips")
+    clean_dir   = str(Path(output_dir) / "clean")
+    queue_names = {"1":"pipeline_queue","2":"split_queue","3":"subtitle_queue"}
+    qname       = queue_names[stage]
+
+    # 扫描本阶段输入文件
+    src_files = _scan_stage_input(stage, args.input_dir or "", output_dir)
+    if not src_files:
+        console.print(f"[red]Stage {stage}：未找到输入文件！[/red]"); return False
+
+    # 初始化队列
+    q = TaskQueue(queue_dir=queue_dir, worker_id="dispatcher", queue_name=qname)
+    pre = q.stats()
+    q.init_queue(src_files=src_files, start_idx=1, force=args.force)
+    s         = q.stats()
+    total_q   = sum(s.values())
+    done_cnt  = s.get("done", 0)
+    pct       = f"{done_cnt/total_q*100:.1f}%" if total_q else "0%"
+    resuming  = pre.get("done",0) > 0 or pre.get("error",0) > 0
+    console.print(f"\n  输入文件数 : [bold]{len(src_files)}[/bold]")
+    if resuming:
+        reset_cnt = pre.get("claimed",0)
+        console.print(
+            f"  [yellow]续传模式[/yellow] : "
+            f"[green]done={done_cnt}[/green] ({pct})  "
+            f"[yellow]pending={s.get('pending',0)}[/yellow]  "
+            f"[red]error={s.get('error',0)}[/red]"
+            + (f"  (已重置 {reset_cnt} 个中断任务)" if reset_cnt else ""))
+    else:
+        console.print(f"  [green]全新开始[/green] : 共 {total_q} 个任务")
+
+    if s.get("pending",0) == 0 and s.get("claimed",0) == 0:
+        console.print(f"[green]Stage {stage} 队列无待处理任务，跳过。[/green]"); return False
+
+    if args.dry_run: return False
+
+    # 部署本阶段所需脚本（仅首次）
+    if args.deploy and not deployed:
+        console.print(f"\n[bold]部署脚本（Stage {stage}）...[/bold]")
+        scripts_to_deploy = [
+            "process_videos.py", "scene_split.py",
+            "subtitle_remove.py", "task_queue.py",
+        ]
+        for sv in op_servers:
+            for fn in scripts_to_deploy:
+                local = str(Path(__file__).parent / fn)
+                if not Path(local).exists(): continue
+                dst = str(Path(sv.remote_script).parent / fn)
+                sv.upload(local, dst)
+            log.info(f"[{sv.name}] 脚本部署 ✅")
+
+    # 启动 worker
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    jobs = []
+    for sv in op_servers:
+        log_path   = f"~/pipeline_{sv.name}{log_suffix}.log"
+        log_stdout = log_path + ".stdout"
+        pid_file   = pid_files[sv.name]
+
+        worker_alive, worker_pid = is_worker_alive(sv, pid_file)
+        if worker_alive:
+            log.info(f"[{sv.name}] Stage {stage} Worker 已在运行 (PID={worker_pid})")
+            jobs.append((sv, log_stdout, pid_file))
+            threading.Thread(target=tail_log,
+                             args=(sv, log_stdout, stop_ev), daemon=True).start()
+            continue
+
+        if not check_queue_access(sv, queue_dir, qname):
+            console.print(
+                f"\n  [bold red][{sv.name}] ⚠ 队列文件不可访问[/bold red]\n"
+                f"  路径: {queue_dir}/{qname}.json\n"
+                f"  请确认该机器已挂载共享存储，跳过此机器。")
+            continue
+
+        workers = args.workers or (2 if stage == "2" else 1 if stage == "3" else 0)
+        if stage == "1":
+            cmd = build_cmd_stage1(sv, py_paths[sv.name], args.input_dir,
+                                   output_dir, queue_dir, pid_file, workers, log_path)
+        elif stage == "2":
+            cmd = build_cmd_stage2(sv, py_paths[sv.name], output_dir,
+                                   clips_dir, queue_dir, pid_file, workers, log_path,
+                                   trim_shots=getattr(args,"trim_shots",10))
+        else:
+            vsr = getattr(args,"vsr_dir","") or sv.vsr_dir or "~/video-subtitle-remover"
+            cmd = build_cmd_stage3(sv, py_paths[sv.name], clips_dir,
+                                   clean_dir, queue_dir, pid_file, workers, log_path,
+                                   vsr_dir=vsr)
+
+        console.print(f"\n[bold][{sv.name}][/bold] Stage {stage}:\n  [dim]{cmd}[/dim]")
+        if sv.launch_bg(cmd, log_stdout):
+            log.info(f"[{sv.name}] 等待 PID 文件（最多 30s）...")
+            if wait_for_pid(sv, pid_file, timeout=30):
+                log.info(f"[{sv.name}] Worker 已确认启动 ✅")
+                jobs.append((sv, log_stdout, pid_file))
+                threading.Thread(target=tail_log,
+                                 args=(sv, log_stdout, stop_ev), daemon=True).start()
+            else:
+                console.print(
+                    f"  [bold red][{sv.name}] ❌ 30s 内未见 PID 文件\n"
+                    f"  检查日志: {log_stdout}[/bold red]")
+
+    if not jobs:
+        console.print(f"[red]Stage {stage}：没有服务器启动成功！[/red]"); return False
+
+    # 等待完成
+    sv_names = ",".join(s.name for s, *_ in jobs)
+    console.print(
+        f"\n[bold]Stage {stage} 等待完成...[/bold]  (每 30s 刷新进度)\n"
+        f"  Ctrl+C → 主控退出（worker 继续）  |  停止 → --stop")
+    wts = []
+    for sv, _, pf in jobs:
+        t = threading.Thread(
+            target=lambda s=sv, p=pf: (wait_done(s, p), log.info(f"[{s.name}] ✅ 完成")),
+            daemon=True)
+        t.start(); wts.append(t)
+
+    while any(t.is_alive() for t in wts):
+        for t in wts:
+            t.join(timeout=30)
+        s2    = q.stats()
+        tot2  = sum(s2.values())
+        done2 = s2.get("done", 0)
+        pct2  = f"{done2/tot2*100:.1f}%" if tot2 else "0%"
+        console.print(
+            f"  [dim]{time.strftime('%H:%M:%S')}[/dim]  Stage {stage}  "
+            f"进度 [bold]{pct2}[/bold]  "
+            f"[green]done={done2}[/green]  "
+            f"[yellow]pending={s2.get('pending',0)}[/yellow]  "
+            f"[blue]claimed={s2.get('claimed',0)}[/blue]  "
+            f"[red]error={s2.get('error',0)}[/red]")
+
+    stop_ev.clear()  # 重置事件，为下一阶段复用
+    return True
+
+
 def main():
-    parser = argparse.ArgumentParser(description="分布式调度器 v5.2")
+    parser = argparse.ArgumentParser(description="分布式调度器 v6.0")
     parser.add_argument("--input-dir");  parser.add_argument("--output-dir")
     parser.add_argument("--servers", required=True)
-    parser.add_argument("--deploy",   action="store_true", help="部署脚本到各机器")
-    parser.add_argument("--git-pull", action="store_true", help="部署前 git pull")
-    parser.add_argument("--force",    action="store_true", help="重置队列（全部重跑）")
-    parser.add_argument("--workers",  type=int, default=0)
-    parser.add_argument("--dry-run",  action="store_true")
-    parser.add_argument("--check",    action="store_true")
-    parser.add_argument("--stop",     action="store_true", help="终止服务器（可配合 --target）")
-    parser.add_argument("--status",   action="store_true", help="查看各服务器运行状态和队列进度")
-    parser.add_argument("--target",   type=str, default="",
+    parser.add_argument("--deploy",      action="store_true", help="部署脚本到各机器")
+    parser.add_argument("--git-pull",    action="store_true", help="部署前 git pull")
+    parser.add_argument("--force",       action="store_true", help="重置队列（全部重跑）")
+    parser.add_argument("--workers",     type=int, default=0)
+    parser.add_argument("--dry-run",     action="store_true")
+    parser.add_argument("--check",       action="store_true")
+    parser.add_argument("--stop",        action="store_true", help="终止服务器（可配合 --target）")
+    parser.add_argument("--status",      action="store_true", help="查看各服务器运行状态和队列进度")
+    parser.add_argument("--target",      type=str, default="",
                         help="指定操作的机器名，逗号分隔。例: --target A6000 或 --target A6000,A8000")
+    parser.add_argument("--stage",       type=str, default="1",
+                        choices=["1","2","3","all"],
+                        help="处理阶段: 1=转码, 2=镜头切分, 3=字幕去除, all=全部顺序执行")
+    parser.add_argument("--trim-shots",  type=int, default=10,
+                        help="Stage 2：首尾各去掉的镜头数（默认 10）")
+    parser.add_argument("--vsr-dir",     type=str, default="",
+                        help="Stage 3：video-subtitle-remover 路径，覆盖 servers.yaml 里的 vsr_dir")
     args = parser.parse_args()
 
     servers = load_servers(args.servers)
 
     # ── 连通性 ──
-    console.rule("[bold cyan]🎬  分布式调度器 v5.2[/bold cyan]")
+    console.rule("[bold cyan]🎬  分布式调度器 v6.0[/bold cyan]")
     alive = []
     for s in servers:
         ok = check_server(s)
@@ -431,15 +645,38 @@ def main():
     else:
         op_servers = alive
 
+    # ── --stop：尝试停止所有阶段的 worker ──
     if args.stop:
-        stop_all(op_servers, pid_files); return
+        all_pid_files = {}
+        for s in op_servers:
+            for sfx in ("", "_split", "_subtitle"):
+                key = f"{s.name}{sfx}"
+                all_pid_files[key] = f"~/pipeline_{s.name}{sfx}.pid"
+        # stop_all 需要 Server 列表和 pid_files 字典
+        # 对每个后缀单独广播 kill
+        for sfx, label in (("","Stage1"), ("_split","Stage2"), ("_subtitle","Stage3")):
+            pf = {s.name: f"~/pipeline_{s.name}{sfx}.pid" for s in op_servers}
+            # 检查是否有该阶段的 PID 文件存在再 kill（跳过不存在的）
+            targets = []
+            for sv in op_servers:
+                r = sv.run(f"[ -f {pf[sv.name]} ] && echo yes || echo no", timeout=5)
+                if "yes" in r.stdout: targets.append(sv)
+            if targets:
+                console.print(f"\n[bold]{label}[/bold]")
+                stop_all(targets, pf)
+        return
+
     if args.status:
         qd = str(Path(args.output_dir) / ".queue") if args.output_dir else ""
         status_all(alive, pid_files, qd); return   # status 始终显示所有机器
     if args.check:    return
     if not alive:     console.print("[red]没有可用服务器！[/red]"); sys.exit(1)
-    if not args.input_dir or not args.output_dir:
-        console.print("[red]需要 --input-dir 和 --output-dir[/red]"); sys.exit(1)
+
+    # Stage 1 需要 input_dir；Stage 2/3 只需 output_dir
+    if args.stage in ("1","all") and not args.input_dir:
+        console.print("[red]Stage 1 需要 --input-dir[/red]"); sys.exit(1)
+    if not args.output_dir:
+        console.print("[red]需要 --output-dir[/red]"); sys.exit(1)
 
     # ── git pull ──
     if args.git_pull:
@@ -457,103 +694,20 @@ def main():
     if not op_servers:
         console.print("[red]所有服务器都找不到 python！[/red]"); sys.exit(1)
 
-    # ── 初始化队列 ──
-    sys.path.insert(0, str(Path(__file__).parent))
-    from task_queue import TaskQueue
-
-    all_videos = scan_videos(args.input_dir)
-    if not all_videos:
-        console.print("[red]未找到视频文件！[/red]"); sys.exit(1)
-
-    queue_dir = str(Path(args.output_dir) / ".queue")
-    q = TaskQueue(queue_dir=queue_dir, worker_id="dispatcher")
-    pre = q.stats()   # 重置前的状态（用于续传提示）
-    q.init_queue(src_files=all_videos, start_idx=1, force=args.force)
-    s = q.stats()
-    total_in_dir = len(all_videos)
-    total_in_q   = sum(s.values())
-    done_cnt     = s.get("done", 0)
-    pct          = f"{done_cnt/total_in_q*100:.1f}%" if total_in_q else "0%"
-    was_resuming = pre.get("done", 0) > 0 or pre.get("error", 0) > 0
-    console.print(f"\n  输入目录视频总数 : [bold]{total_in_dir}[/bold]")
-    if was_resuming:
-        reset_count = pre.get("claimed", 0)
-        console.print(
-            f"  [yellow]续传模式[/yellow] : "
-            f"[green]done={done_cnt}[/green] ({pct})  "
-            f"[yellow]pending={s.get('pending',0)}[/yellow]  "
-            f"[red]error={s.get('error',0)}[/red]"
-            + (f"  (已重置 {reset_count} 个中断任务)" if reset_count else ""))
-    else:
-        console.print(f"  [green]全新开始[/green] : 共 {total_in_q} 个任务")
-    if s.get("pending",0) == 0 and s.get("claimed",0) == 0:
-        console.print("[green]队列无待处理任务，全部完成！[/green]"); return
-
     # ── 服务器表 ──
-    tbl = Table(title="参与服务器（动态抢队列）", box=None)
+    tbl = Table(title="参与服务器", box=None)
     tbl.add_column("服务器",style="cyan"); tbl.add_column("GPU",style="yellow")
-    tbl.add_column("并发",style="bold"); tbl.add_column("权重",style="dim")
+    tbl.add_column("权重",style="dim");   tbl.add_column("VSR路径",style="dim")
     for sv in op_servers:
-        tbl.add_row(sv.name, str(sv.gpus), str(args.workers or "auto(3)"), str(sv.weight))
+        tbl.add_row(sv.name, str(sv.gpus), str(sv.weight),
+                    sv.vsr_dir or getattr(args,"vsr_dir","") or "-")
     console.print(tbl)
 
-    if args.dry_run: return
+    sys.path.insert(0, str(Path(__file__).parent))
+    queue_dir = str(Path(args.output_dir) / ".queue")
 
-    # ── 部署 ──
-    if args.deploy:
-        console.print("\n[bold]部署脚本...[/bold]")
-        local_pv = str(Path(__file__).parent / "process_videos.py")
-        local_tq = str(Path(__file__).parent / "task_queue.py")
-        for sv in op_servers:
-            deploy_script(sv, local_pv)
-            sv.upload(local_tq, str(Path(sv.remote_script).parent / "task_queue.py"))
-            log.info(f"[{sv.name}] task_queue.py ✅")
-
-    # ── 启动 ──
-    Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+    # ── Ctrl+C：主控退出，worker 继续 ──
     stop_ev = threading.Event()
-    jobs    = []
-
-    for sv in op_servers:
-        log_path   = f"~/pipeline_{sv.name}.log"
-        log_stdout = log_path + ".stdout"
-        pid_file   = pid_files[sv.name]
-
-        worker_alive, worker_pid = is_worker_alive(sv, pid_file)
-        if worker_alive:
-            log.info(f"[{sv.name}] Worker 已在运行 (PID={worker_pid})，附加监控日志")
-            jobs.append((sv, log_stdout, pid_file))
-            threading.Thread(target=tail_log,
-                             args=(sv, log_stdout, stop_ev), daemon=True).start()
-            continue
-
-        if not check_queue_access(sv, queue_dir):
-            console.print(
-                f"\n  [bold red][{sv.name}] ⚠ 队列文件不可访问[/bold red]\n"
-                f"  路径: {queue_dir}/.pipeline_queue.json\n"
-                f"  该机器上 /mnt/movies/Films/output 可能是本地空目录而非 NAS 挂载点。\n"
-                f"  请在 {sv.name} 上挂载共享存储后重试，跳过此机器。")
-            continue
-
-        cmd = build_cmd(sv, py_paths[sv.name], args.input_dir, args.output_dir,
-                        queue_dir, pid_file, args.workers, log_path)
-        console.print(f"\n[bold][{sv.name}][/bold]:\n  [dim]{cmd}[/dim]")
-        if sv.launch_bg(cmd, log_stdout):
-            log.info(f"[{sv.name}] 等待 worker 写入 PID 文件（最多 30s）...")
-            if wait_for_pid(sv, pid_file, timeout=30):
-                log.info(f"[{sv.name}] Worker 已确认启动 ✅")
-                jobs.append((sv, log_stdout, pid_file))
-                threading.Thread(target=tail_log,
-                                 args=(sv, log_stdout, stop_ev), daemon=True).start()
-            else:
-                console.print(
-                    f"  [bold red][{sv.name}] ❌ 30s 内未见 PID 文件，worker 可能启动失败\n"
-                    f"  检查日志: {log_stdout}[/bold red]")
-
-    if not jobs:
-        console.print("[red]没有服务器启动成功！[/red]"); sys.exit(1)
-
-    # ── Ctrl+C：直接退出主控，远端继续跑 ──
     sv_names = ",".join(s.name for s in op_servers)
     def _sigint(sig, frame):
         signal.signal(signal.SIGINT, signal.SIG_DFL)
@@ -568,34 +722,17 @@ def main():
         sys.exit(0)
     signal.signal(signal.SIGINT, _sigint)
 
-    console.print(
-        f"\n[bold]等待完成...[/bold]  (每 30s 刷新进度)\n"
-        f"  Ctrl+C → 主控退出（worker 继续）\n"
-        f"  停止全部 → --stop  |  停止单台 → --stop --target {sv_names.split(',')[0]}")
-    wts = []
-    for sv,_,pf in jobs:
-        t = threading.Thread(
-            target=lambda s=sv,p=pf: (wait_done(s,p), log.info(f"[{s.name}] ✅ 完成")),
-            daemon=True)
-        t.start(); wts.append(t)
+    # ── 按阶段依次执行 ──
+    stages = ["1","2","3"] if args.stage == "all" else [args.stage]
+    deployed = False
+    for stage in stages:
+        stage_labels = {"1":"转码","2":"镜头切分","3":"字幕去除"}
+        console.rule(f"[bold cyan]Stage {stage}：{stage_labels[stage]}[/bold cyan]")
+        _run_stage(stage, op_servers, py_paths, args,
+                   pid_files, queue_dir, stop_ev, deployed=deployed)
+        deployed = True  # 后续阶段无需重复部署
 
-    while any(t.is_alive() for t in wts):
-        for t in wts:
-            t.join(timeout=30)
-        s2    = q.stats()
-        tot2  = sum(s2.values())
-        done2 = s2.get("done", 0)
-        pct2  = f"{done2/tot2*100:.1f}%" if tot2 else "0%"
-        console.print(
-            f"  [dim]{time.strftime('%H:%M:%S')}[/dim]  "
-            f"进度 [bold]{pct2}[/bold]  "
-            f"[green]done={done2}[/green]  "
-            f"[yellow]pending={s2.get('pending',0)}[/yellow]  "
-            f"[blue]claimed={s2.get('claimed',0)}[/blue]  "
-            f"[red]error={s2.get('error',0)}[/red]")
-
-    stop_ev.set()
-    console.rule("[bold green]所有服务器完成 🎉[/bold green]")
+    console.rule("[bold green]所有阶段完成 🎉[/bold green]")
 
 if __name__ == "__main__":
     main()
