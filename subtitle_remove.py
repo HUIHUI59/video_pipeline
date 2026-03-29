@@ -204,9 +204,12 @@ def remove_one(src: str, clean_root: str, vsr_dir: str,
             [sys.executable, "-c", worker_code],
             timeout=3600,
             env=env,
+            stdout=subprocess.DEVNULL,   # VSR 大量进度条/模型日志 → 静默
+            stderr=subprocess.PIPE,       # 仅保留 stderr 用于错误诊断
         )
         if proc.returncode != 0:
-            res.error = f"VSR 子进程退出码 {proc.returncode}"
+            err_tail = (proc.stderr or b"").decode(errors="replace")[-500:]
+            res.error = f"VSR 退出码 {proc.returncode}: {err_tail}"
             if queue: queue.mark_failed(src, res.error)
             return res
     except subprocess.TimeoutExpired:
