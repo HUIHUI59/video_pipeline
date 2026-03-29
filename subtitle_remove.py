@@ -157,9 +157,18 @@ def remove_one(src: str, clean_root: str, vsr_dir: str,
     vsr_path = str(Path(os.path.expanduser(vsr_dir)))
     worker_code = _build_worker_script(vsr_path, src, dst)
 
-    # 确保子进程能找到 cuDNN 等 NVIDIA 库（pip nvidia-* 包安装在 site-packages 下）
+    # 确保子进程能找到 cuDNN 等 NVIDIA 库
+    # 优先级：~/cudnn8/lib（cuDNN 8，供 paddle cu118）> site-packages nvidia/*/lib（cuDNN 9，供 torch）
+    # RTX4090 使用 cu126，paddle 也需要 cuDNN 9，~/cudnn8/lib 不存在时自动跳过
     env = os.environ.copy()
-    nvidia_lib_dirs = []
+    lib_dirs = []
+
+    # 1) cuDNN 8 目录（A6000/A8000 cu118 专用，cu126 机器无此目录则跳过）
+    cudnn8_dir = Path.home() / "cudnn8" / "lib"
+    if cudnn8_dir.is_dir():
+        lib_dirs.append(str(cudnn8_dir))
+
+    # 2) pip 安装的 nvidia-* 包的 lib 目录（包含 cuDNN 9 / cuBLAS / cuSolver 等）
     try:
         import site as _site
         for sp in _site.getsitepackages():
@@ -168,11 +177,12 @@ def remove_one(src: str, clean_root: str, vsr_dir: str,
                 for sub in nvidia_base.iterdir():
                     lib_dir = sub / "lib"
                     if lib_dir.is_dir():
-                        nvidia_lib_dirs.append(str(lib_dir))
+                        lib_dirs.append(str(lib_dir))
     except Exception:
         pass
-    if nvidia_lib_dirs:
-        env["LD_LIBRARY_PATH"] = ":".join(nvidia_lib_dirs) + ":" + env.get("LD_LIBRARY_PATH", "")
+
+    if lib_dirs:
+        env["LD_LIBRARY_PATH"] = ":".join(lib_dirs) + ":" + env.get("LD_LIBRARY_PATH", "")
 
     try:
         proc = subprocess.run(

@@ -76,11 +76,37 @@ pip install paddlepaddle-gpu==3.0.0 \
     -i "${PADDLE_INDEX}" \
     --trusted-host www.paddlepaddle.org.cn
 
-# cu118 的 PaddlePaddle 链接 libcudnn.so.8（cuDNN 8），但某些 VSR 依赖会拉入
-# nvidia-cudnn-cu12（cuDNN 9），导致找不到 .so.8。确保 cuDNN 8 也可用。
+# cu118：torch 需要 nvidia-cudnn-cu11==9.1.0.70（cuDNN 9），
+#         paddle  需要 libcudnn.so.8（cuDNN 8）。
+# 两者版本号互斥，不能同时 pip install。
+# 解决方案：仅下载 cuDNN 8 wheel，提取 .so.8 文件到 ~/cudnn8/lib/，
+# 并保持 nvidia-cudnn-cu11 为 9.1.0.70（torch 需要）。
+# subtitle_remove.py 在启动子进程时会将 ~/cudnn8/lib/ 注入 LD_LIBRARY_PATH。
 if [ "$CUDA_TAG" = "cu118" ]; then
-    echo "  cu118: 确保 cuDNN 8 可用..."
-    pip install "nvidia-cudnn-cu11>=8.9,<9" 2>/dev/null || true
+    echo "  cu118: 提取 cuDNN 8 库文件到 ~/cudnn8/lib/ ..."
+    mkdir -p ~/cudnn8/lib
+    WHEEL_DIR=$(mktemp -d /tmp/cudnn8_whl_XXXXXX)
+    pip download "nvidia-cudnn-cu11==8.9.6.50" -d "$WHEEL_DIR" --no-deps -q 2>&1 | tail -2
+    WHEEL_FILE=$(ls "$WHEEL_DIR"/nvidia_cudnn_cu11-8.9.6.50-*.whl 2>/dev/null | head -1)
+    if [ -n "$WHEEL_FILE" ]; then
+        python3 - <<PYEOF
+import zipfile, shutil, os
+dst_dir = os.path.expanduser("~/cudnn8/lib")
+with zipfile.ZipFile("${WHEEL_FILE}") as z:
+    for name in z.namelist():
+        if ".so.8" in name and not name.endswith(".py"):
+            basename = os.path.basename(name)
+            data = z.read(name)
+            out = os.path.join(dst_dir, basename)
+            with open(out, "wb") as f:
+                f.write(data)
+            print(f"  提取: {basename}")
+PYEOF
+        echo "  cuDNN 8 文件已保存到 ~/cudnn8/lib/"
+    else
+        echo "  ⚠ 未找到 cuDNN 8 wheel 文件，跳过"
+    fi
+    rm -rf "$WHEEL_DIR"
 fi
 
 # ── PyTorch ───────────────────────────────────────
