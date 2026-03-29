@@ -170,7 +170,7 @@ def scan_videos(root: str) -> list[str]:
 
 def run_queue(queue, clips_root: str, workers: int,
               trim_shots: int, stop_ev):
-    results = []
+    counts  = {"ok": 0, "skip": 0, "err": 0}
     current = {}
     hb_lock = threading.Lock()
 
@@ -227,7 +227,9 @@ def run_queue(queue, clips_root: str, workers: int,
                         except Exception as e:
                             res = SplitResult(src_path=src, error=str(e))
                             queue.mark_failed(src, str(e))
-                        results.append(res)
+                        if res.skip: counts["skip"] += 1
+                        elif res.success: counts["ok"] += 1
+                        else: counts["err"] += 1
                         icon = "⏭" if res.skip else ("✅" if res.success else "❌")
                         log.info(
                             f"{icon} {Path(res.src_path).name}"
@@ -246,7 +248,7 @@ def run_queue(queue, clips_root: str, workers: int,
                     time.sleep(8)
                     submit_next()
 
-    return results
+    return counts
 
 # ══════════════════════════════════════════════════════════════
 # main

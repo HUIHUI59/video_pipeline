@@ -156,10 +156,29 @@ def remove_one(src: str, clean_root: str, vsr_dir: str,
     # 每个 clip 在独立子进程中运行，避免 paddle libpaddle.so 无法二次初始化
     vsr_path = str(Path(os.path.expanduser(vsr_dir)))
     worker_code = _build_worker_script(vsr_path, src, dst)
+
+    # 确保子进程能找到 cuDNN 等 NVIDIA 库（pip nvidia-* 包安装在 site-packages 下）
+    env = os.environ.copy()
+    nvidia_lib_dirs = []
+    try:
+        import site as _site
+        for sp in _site.getsitepackages():
+            nvidia_base = Path(sp) / "nvidia"
+            if nvidia_base.is_dir():
+                for sub in nvidia_base.iterdir():
+                    lib_dir = sub / "lib"
+                    if lib_dir.is_dir():
+                        nvidia_lib_dirs.append(str(lib_dir))
+    except Exception:
+        pass
+    if nvidia_lib_dirs:
+        env["LD_LIBRARY_PATH"] = ":".join(nvidia_lib_dirs) + ":" + env.get("LD_LIBRARY_PATH", "")
+
     try:
         proc = subprocess.run(
             [sys.executable, "-c", worker_code],
             timeout=3600,
+            env=env,
         )
         if proc.returncode != 0:
             res.error = f"VSR 子进程退出码 {proc.returncode}"
@@ -209,7 +228,7 @@ def run_queue(queue, clean_root: str, vsr_dir: str, _conda_env: str,
     第二次 paddle 初始化会与第一次的 libpaddle.so 残留状态冲突并报错。
     顺序处理确保每个任务完全结束、paddle 资源释放后再处理下一个。
     """
-    results   = []
+    counts    = {"ok": 0, "skip": 0, "err": 0}
     cur_src   = [None]   # 供心跳线程读取当前任务路径
 
     def hb_loop():
@@ -253,7 +272,9 @@ def run_queue(queue, clean_root: str, vsr_dir: str, _conda_env: str,
             finally:
                 cur_src[0] = None
 
-            results.append(res)
+            if res.skip: counts["skip"] += 1
+            elif res.success: counts["ok"] += 1
+            else: counts["err"] += 1
             icon = "⏭" if res.skip else ("✅" if res.success else "❌")
             log.info(
                 f"{icon} {Path(res.src_path).name}"
@@ -266,7 +287,7 @@ def run_queue(queue, clean_root: str, vsr_dir: str, _conda_env: str,
                         extra=f"done={s2.get('done',0)} "
                               f"pending={s2.get('pending',0)}")
 
-    return results
+    return counts
 
 # ══════════════════════════════════════════════════════════════
 # main

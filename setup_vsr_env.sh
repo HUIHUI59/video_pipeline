@@ -20,10 +20,19 @@ echo "================================================"
 # ── 前置检查 ─────────────────────────────────────
 [ -d "$VSR_DIR" ] || { echo "❌ 未找到 ${VSR_DIR}，请先 git clone VSR 仓库"; exit 1; }
 command -v conda &>/dev/null || { echo "❌ 未找到 conda"; exit 1; }
-nvidia-smi &>/dev/null      || { echo "❌ 未检测到 NVIDIA GPU"; exit 1; }
+
+# nvidia-smi 路径：WSL2 下位于 /usr/lib/wsl/lib/，不在默认 PATH 中
+NVIDIA_SMI=""
+if command -v nvidia-smi &>/dev/null; then
+    NVIDIA_SMI="nvidia-smi"
+elif [ -x /usr/lib/wsl/lib/nvidia-smi ]; then
+    NVIDIA_SMI="/usr/lib/wsl/lib/nvidia-smi"
+fi
+[ -n "$NVIDIA_SMI" ] || { echo "❌ 未检测到 NVIDIA GPU（nvidia-smi 不在 PATH 中）"; exit 1; }
+$NVIDIA_SMI &>/dev/null || { echo "❌ nvidia-smi 执行失败"; exit 1; }
 
 # ── 检测 CUDA 版本 ────────────────────────────────
-CUDA_VER=$(nvidia-smi | grep -oP "CUDA Version: \K[0-9]+\.[0-9]+" | head -1)
+CUDA_VER=$($NVIDIA_SMI | grep -oP "CUDA Version: \K[0-9]+\.[0-9]+" | head -1)
 CUDA_MAJOR=$(echo "$CUDA_VER" | cut -d. -f1)
 CUDA_MINOR=$(echo "$CUDA_VER" | cut -d. -f2)
 echo "✅ 检测到 CUDA ${CUDA_VER}"
@@ -66,6 +75,13 @@ echo "=== [2/6] 安装 PaddlePaddle-GPU (${CUDA_TAG}) ==="
 pip install paddlepaddle-gpu==3.0.0 \
     -i "${PADDLE_INDEX}" \
     --trusted-host www.paddlepaddle.org.cn
+
+# cu118 的 PaddlePaddle 链接 libcudnn.so.8（cuDNN 8），但某些 VSR 依赖会拉入
+# nvidia-cudnn-cu12（cuDNN 9），导致找不到 .so.8。确保 cuDNN 8 也可用。
+if [ "$CUDA_TAG" = "cu118" ]; then
+    echo "  cu118: 确保 cuDNN 8 可用..."
+    pip install "nvidia-cudnn-cu11>=8.9,<9" 2>/dev/null || true
+fi
 
 # ── PyTorch ───────────────────────────────────────
 echo ""

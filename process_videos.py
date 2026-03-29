@@ -297,7 +297,7 @@ def process_one(src, dst, gpu_id, nvenc,
 # ══════════════════════════════════════════════════════════════
 
 def run_queue(queue, out_root, gpu_ids, nvenc, workers, stop_ev):
-    results = []
+    counts  = {"ok": 0, "skip": 0, "err": 0}   # 只记计数，不积累 result 对象
     current = {}   # future → src，用于心跳
     hb_lock = threading.Lock()
 
@@ -359,7 +359,9 @@ def run_queue(queue, out_root, gpu_ids, nvenc, workers, stop_ev):
                         except Exception as e:
                             res = JobResult(src_path=src, error=str(e))
                             queue.mark_failed(src, str(e))
-                        results.append(res)
+                        if res.skip: counts["skip"] += 1
+                        elif res.success: counts["ok"] += 1
+                        else: counts["err"] += 1
                         icon = "⏭" if res.skip else ("✅" if res.success else "❌")
                         log.info(f"{icon} {Path(res.src_path).name}"
                                  + (f" → {Path(res.dst_path).name}" if res.dst_path else "")
@@ -376,7 +378,7 @@ def run_queue(queue, out_root, gpu_ids, nvenc, workers, stop_ev):
                     time.sleep(8)
                     submit_next()
 
-    return results
+    return counts
 
 # ══════════════════════════════════════════════════════════════
 # 扫描 & NVENC 检测

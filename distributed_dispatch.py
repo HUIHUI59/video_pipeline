@@ -388,17 +388,24 @@ def tail_log(server:Server, log_stdout:str, stop_ev:threading.Event):
     else:
         full = ["ssh"]+server.ssh_opts()+[f"{server.user}@{server.host}",
                                            f"tail -f {log_stdout}"]
+    proc = None
     try:
         proc = subprocess.Popen(full, stdout=subprocess.PIPE,
                                 stderr=subprocess.DEVNULL,
-                                stdin=subprocess.DEVNULL,   # 不继承终端 stdin
+                                stdin=subprocess.DEVNULL,
                                 text=True)
         while not stop_ev.is_set():
             line = proc.stdout.readline()
             if line: console.print(f"  [dim][{server.name}][/dim] {line.rstrip()}")
             else: time.sleep(0.3)
-        proc.terminate()
     except Exception: pass
+    finally:
+        if proc:
+            proc.terminate()
+            try: proc.stdout.close()
+            except Exception: pass
+            try: proc.wait(timeout=5)
+            except Exception: proc.kill()
 
 def wait_done(server:Server, pid_file:str, poll:int=10):
     while True:
@@ -569,7 +576,7 @@ def _run_stage(stage:str, op_servers:list, py_paths:dict, args,
             if sv.is_local:
                 log_p = os.path.expanduser(log_stdout)
                 if os.path.exists(log_p):
-                    content = open(log_p).read()
+                    content = Path(log_p).read_text(errors="replace")
                     if "完成" in content or "done=0" in content or "✅=0" in content:
                         already_done = True
             if already_done:
