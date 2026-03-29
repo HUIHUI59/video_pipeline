@@ -490,7 +490,14 @@ def main():
                       f"claimed={s.get('claimed',0)}  done={s.get('done',0)}")
         if s.get("pending",0) + s.get("claimed",0) == 0:
             console.print("[green]队列无待处理任务，退出。[/green]"); return
-        results = run_queue(queue, out_root, gpu_ids, nvenc, workers, stop_ev)
+        counts  = run_queue(queue, out_root, gpu_ids, nvenc, workers, stop_ev)
+        # 队列模式汇总（run_queue 返回计数 dict，跳过本地模式的 results 汇总）
+        console.rule("[bold]完成[/bold]")
+        console.print(f"  ✅={counts['ok']}  ⏭={counts['skip']}  ❌={counts['err']}")
+        if args.pid_file:
+            try: Path(os.path.expanduser(args.pid_file)).unlink(missing_ok=True)
+            except Exception: pass
+        return
 
     # ══ 本地模式 ══════════════════════════════════════════════
     else:
