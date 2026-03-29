@@ -145,8 +145,20 @@ def split_one(src: str, clips_root: str,
 # ══════════════════════════════════════════════════════════════
 
 def scan_videos(root: str) -> list[str]:
+    """
+    递归扫描 root 下的所有视频文件。
+    自动跳过 pipeline 自身生成的子目录（clips/ clean/ .queue/），
+    防止本地模式下把已切分的片段当成新的源文件重复处理。
+    """
+    root_path = Path(root).resolve()
+    skip_dirs = {root_path / "clips", root_path / "clean", root_path / ".queue"}
     found = []
-    for d, _, fns in os.walk(root):
+    for d, dirs, fns in os.walk(root):
+        # 原地修改 dirs 列表以阻止 os.walk 进入被跳过的目录
+        dirs[:] = [
+            sub for sub in dirs
+            if (Path(d) / sub).resolve() not in skip_dirs
+        ]
         for fn in sorted(fns):
             if Path(fn).suffix.lower() in VIDEO_EXTENSIONS:
                 found.append(os.path.join(d, fn))

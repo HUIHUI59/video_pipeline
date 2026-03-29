@@ -41,15 +41,38 @@ class TaskQueue:
             self._lock_fd = None
 
     def _load(self) -> dict:
-        if self.queue_file.exists():
-            try:
-                return json.loads(self.queue_file.read_text(encoding="utf-8"))
-            except Exception:
-                pass
-        return {"tasks": {}}
+        if not self.queue_file.exists():
+            return {"tasks": {}}
+        raw = self.queue_file.read_text(encoding="utf-8", errors="replace")
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            # 共享网络文件系统（SMB/NFS）上多进程并发写 .tmp 时偶发 JSON 拼接损坏。
+            # 尝试取首个完整的 JSON 对象（第一个顶层 } 结束处）。
+            depth = 0
+            for i, ch in enumerate(raw):
+                if ch == "{":
+                    depth += 1
+                elif ch == "}" and depth > 0:
+                    depth -= 1
+                    if depth == 0:
+                        try:
+                            result = json.loads(raw[: i + 1])
+                            log.warning(
+                                f"队列文件 JSON 损坏已自动修复（截取前 {i+1} 字节）: "
+                                f"{self.queue_file}"
+                            )
+                            return result
+                        except json.JSONDecodeError:
+                            break
+            log.error(f"队列文件无法解析，重置为空: {self.queue_file}")
+            return {"tasks": {}}
 
     def _save(self, data: dict):
-        tmp = self.queue_file.with_suffix(".tmp")
+        # 使用进程唯一的 tmp 文件名，防止多机并发在共享文件系统上同时覆盖同一 .tmp。
+        tmp = self.queue_file.with_name(
+            f"{self.queue_file.stem}.{os.getpid()}.tmp"
+        )
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp.replace(self.queue_file)
 
