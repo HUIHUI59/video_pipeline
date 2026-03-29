@@ -91,9 +91,14 @@ class SubResult:
 # VSR 的部分依赖（如 backend/tools/train_sttn.py）在模块作用域调用
 # argparse.parse_args()，若 sys.argv 含额外参数会以 exit(2) 退出。
 # 嵌入值 + sys.argv=['vsr_worker'] 可彻底规避此问题。
-def _build_worker_script(vsr_path: str, src: str, dst: str) -> str:
+def _build_worker_script(vsr_path: str, src: str, dst: str,
+                         sub_area: str = "None") -> str:
+    """
+    sub_area: 字幕检测区域，格式 "(ymin, ymax, xmin, xmax)" 或 "None"（全帧检测）。
+    设为画面底部区域可避免误删非字幕文字（如人脸附近的文字、Logo 等）。
+    """
     return textwrap.dedent(f"""\
-        import sys, os, shutil, tempfile
+        import sys, os, shutil, tempfile, cv2
         from pathlib import Path
 
         # 清空 sys.argv，防止 VSR 依赖中模块级 argparse.parse_args() 报错退出
@@ -105,6 +110,16 @@ def _build_worker_script(vsr_path: str, src: str, dst: str) -> str:
 
         src = {repr(src)}
         dst = {repr(dst)}
+        sub_area = {sub_area}
+
+        # 若未显式指定 sub_area，自动计算：画面底部 25%
+        if sub_area is None:
+            cap = cv2.VideoCapture(src)
+            h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            cap.release()
+            if h > 0 and w > 0:
+                sub_area = (int(h * 0.75), h, 0, w)
 
         tmp_dir = tempfile.mkdtemp(prefix="vsr_")
         try:
@@ -112,7 +127,7 @@ def _build_worker_script(vsr_path: str, src: str, dst: str) -> str:
             os.symlink(os.path.abspath(src), tmp_src)
             vsr_output = str(Path(tmp_dir) / (Path(src).stem + "_no_sub.mp4"))
 
-            remover = SubtitleRemover(tmp_src, gui_mode=False)
+            remover = SubtitleRemover(tmp_src, sub_area=sub_area, gui_mode=False)
             # patch AFTER __init__（init 会 importlib.reload config 重置原始值）
             vsr_cfg.STTN_SKIP_DETECTION = False
             remover.run()
