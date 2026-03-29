@@ -171,14 +171,10 @@ def calc_br(meta: VideoMeta) -> int:
 
 def build_cmd(src, dst, meta, gpu_id=0, nvenc=True) -> list[str]:
     vf = build_vf(meta); br = calc_br(meta)
-    cmd = ["ffmpeg","-y","-hide_banner","-loglevel","error"]
-    if nvenc:
-        cmd += ["-hwaccel","cuda","-hwaccel_device",str(gpu_id),
-                "-extra_hw_frames","4","-threads","0"]
-    else:
-        cmd += ["-threads","0"]
+    cmd = ["ffmpeg","-y","-hide_banner","-loglevel","error","-threads","0"]
     cmd += ["-i", src]
     if nvenc:
+        # CPU 解码 + NVENC 编码：兼容性最好，避免 hwaccel cuda 对某些输入格式解码失败
         cmd += ["-vf",vf,"-c:v","h264_nvenc","-preset",PRESET_NVENC,
                 "-qp",str(QP_NVENC),"-b:v",f"{br}k",
                 "-maxrate",f"{int(br*1.5)}k","-bufsize",f"{br*2}k",
