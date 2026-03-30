@@ -1,13 +1,24 @@
 #!/usr/bin/env python3
 """
-task_queue.py  v2.0
+task_queue.py  v3.0
 ════════════════════════════════════════════════════════════════
-修复：
-  - init_queue：残留的 claimed 任务重置为 pending（防止新一轮启动
-    时机器看到"全部 claimed"而退出）
-  - claim_next：worker 启动时先等待片刻让所有机器都就绪再抢任务
-    → 改用"有 pending 才认领，没有就等待重试"，不再在启动时立即退出
-  - is_all_done：claimed 且超时才算 pending，否则要等
+v3.0 关键改进（解决共享网络文件系统上的队列数据丢失问题）：
+
+  问题：fcntl.flock 在 SMB/NFS 跨机挂载上不提供真正的排他锁，
+  3 台机器同时对同一个 670KB JSON 文件做 read-modify-write 会产生
+  竞争，导致 JSON 损坏。损坏后 auto-repair 返回空队列，重启时
+  init_queue 看不到任何 done 记录，重新处理所有任务。
+
+  修复1: done-log（追加写，不替换文件）
+    - mark_done() 同时向 {queue}.done.log 追加一条 JSON 行
+    - append 操作在大多数文件系统上比 replace 更原子
+    - init_queue() 在加载主 JSON 后，用 done-log 补全/恢复 done 状态
+    - 即使主 JSON 彻底损坏，done-log 保留了所有完成记录
+
+  修复2: 心跳改用 per-worker 文件
+    - heartbeat() 只写 {queue}.hb.{worker_id}（每台机器独立文件）
+    - 不再每60秒重写整个大 JSON，极大降低主队列文件写入频率
+    - claim_next() / stats() 通过读心跳文件判断任务是否仍存活
 ════════════════════════════════════════════════════════════════
 """
 
@@ -17,7 +28,7 @@ from typing import Optional
 
 log = logging.getLogger("queue")
 
-HEARTBEAT_TIMEOUT = 600   # 秒：claimed 超过此时间无心跳，视为死亡
+HEARTBEAT_TIMEOUT = 600   # 秒：心跳超过此时间无更新，视为死亡
 
 
 class TaskQueue:
@@ -26,10 +37,11 @@ class TaskQueue:
         self.queue_dir  = Path(queue_dir)
         self.queue_file = self.queue_dir / f"{queue_name}.json"
         self.lock_file  = self.queue_dir / f"{queue_name}.lock"
+        self._done_log  = self.queue_dir / f"{queue_name}.done.log"
         self.worker_id  = worker_id or socket.gethostname()
         self._lock_fd   = None
 
-    # ── 文件锁 ──────────────────────────────────────────────────
+    # ── 文件锁（本地进程间有效；SMB/NFS 下尽力而为）────────────────
     def _acquire(self):
         self._lock_fd = open(self.lock_file, "w")
         fcntl.flock(self._lock_fd, fcntl.LOCK_EX)
@@ -40,6 +52,7 @@ class TaskQueue:
             self._lock_fd.close()
             self._lock_fd = None
 
+    # ── 主队列 JSON I/O ──────────────────────────────────────────────
     def _load(self) -> dict:
         if not self.queue_file.exists():
             return {"tasks": {}}
@@ -47,8 +60,7 @@ class TaskQueue:
         try:
             return json.loads(raw)
         except json.JSONDecodeError:
-            # 共享网络文件系统（SMB/NFS）上多进程并发写 .tmp 时偶发 JSON 拼接损坏。
-            # 尝试取首个完整的 JSON 对象（第一个顶层 } 结束处）。
+            # 尝试取首个完整的 JSON 对象
             depth = 0
             for i, ch in enumerate(raw):
                 if ch == "{":
@@ -69,36 +81,95 @@ class TaskQueue:
             return {"tasks": {}}
 
     def _save(self, data: dict):
-        # 使用进程唯一的 tmp 文件名，防止多机并发在共享文件系统上同时覆盖同一 .tmp。
         tmp = self.queue_file.with_name(
             f"{self.queue_file.stem}.{os.getpid()}.tmp"
         )
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp.replace(self.queue_file)
 
-    # ── 初始化队列 ──────────────────────────────────────────────
-    def init_queue(self, src_files: list[str], start_idx: int = 1, force: bool = False):
+    # ── done-log：追加写，不替换文件 ────────────────────────────────
+    def _done_log_append(self, src: str, dst: str):
+        """将完成记录追加到 done-log。即使主 JSON 损坏，此文件仍可恢复进度。"""
+        try:
+            line = json.dumps({"src": src, "dst": dst, "t": time.time()},
+                               ensure_ascii=False) + "\n"
+            with open(self._done_log, "a", encoding="utf-8") as f:
+                f.write(line)
+                f.flush()
+        except Exception:
+            pass  # 非关键路径，失败不影响主流程
+
+    def _done_log_read(self) -> dict:
+        """从 done-log 读取所有完成记录，返回 {src: dst}。"""
+        done: dict = {}
+        if not self._done_log.exists():
+            return done
+        try:
+            for line in self._done_log.read_text(
+                    encoding="utf-8", errors="replace").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                    done[rec["src"]] = rec.get("dst", "")
+                except (json.JSONDecodeError, KeyError):
+                    pass
+        except Exception:
+            pass
+        return done
+
+    # ── per-worker 心跳文件 ──────────────────────────────────────────
+    def _hb_path(self, worker_id: str) -> Path:
+        safe = worker_id.replace("/", "_").replace("\\", "_").replace(":", "_")
+        return self.queue_dir / f"{self.queue_file.stem}.hb.{safe}"
+
+    def _hb_is_alive(self, worker_id: str, claimed_at: float) -> bool:
+        """判断 worker 是否仍在存活（心跳文件优先，回退到 claimed_at）。"""
+        try:
+            data = json.loads(
+                self._hb_path(worker_id).read_text(encoding="utf-8"))
+            return time.time() - data.get("t", 0) < HEARTBEAT_TIMEOUT
+        except Exception:
+            # 心跳文件不存在或损坏 → 回退到 claimed_at（兼容旧版 worker）
+            return time.time() - claimed_at < HEARTBEAT_TIMEOUT
+
+    # ── 初始化队列 ──────────────────────────────────────────────────
+    def init_queue(self, src_files: list[str], start_idx: int = 1,
+                   force: bool = False):
         """
         初始化或刷新队列。
-        - force=True：全部重置为 pending
+        - force=True：全部重置为 pending（忽略 done-log）
         - force=False（续传）：
-            * done → 保留
-            * claimed → 重置为 pending（上次运行中断，本次重新分配）
-            * pending → 保留
-            * 新文件 → 添加为 pending
+            1. 加载主 JSON
+            2. 用 done-log 补全/恢复 done 状态（主 JSON 损坏时的救援机制）
+            3. done → 保留；claimed/pending/error → 重置为 pending；新文件 → 添加
         """
         self.queue_dir.mkdir(parents=True, exist_ok=True)
         self._acquire()
         try:
-            existing = self._load()
+            existing  = self._load()
             old_tasks = {} if force else existing.get("tasks", {})
-            tasks = {}
+
+            # 用 done-log 恢复被主 JSON 损坏丢失的 done 记录
+            restored = 0
+            if not force:
+                for src, dst in self._done_log_read().items():
+                    if (src not in old_tasks
+                            or old_tasks[src].get("status") != "done"):
+                        old_tasks[src] = {
+                            "status": "done", "dst": dst, "worker": "",
+                            "claimed_at": 0.0, "done_at": 0.0,
+                            "output_idx": 0, "retries": 0,
+                        }
+                        restored += 1
+
+            tasks: dict = {}
             added = reset = kept = 0
 
             for i, src in enumerate(src_files):
                 old = old_tasks.get(src)
                 if force or old is None:
-                    # 全新任务
                     tasks[src] = {
                         "status": "pending", "dst": "", "worker": "",
                         "claimed_at": 0.0, "done_at": 0.0,
@@ -106,25 +177,36 @@ class TaskQueue:
                     }
                     added += 1
                 elif old["status"] == "done":
-                    tasks[src] = old   # 已完成，保留
+                    tasks[src] = old
                     kept += 1
-                elif old["status"] in ("claimed", "pending", "error"):
-                    # claimed/pending → 重置为 pending，让本次重新分配
+                else:
+                    # claimed / pending / error → 重置为 pending
                     tasks[src] = {**old,
                         "status": "pending", "worker": "",
                         "claimed_at": 0.0,
                     }
                     reset += 1
 
-            self._save({"tasks": tasks, "updated_at": time.strftime("%Y-%m-%d %H:%M:%S")})
-            log.info(
-                f"队列初始化：total={len(tasks)}  "
-                f"新增={added}  重置={reset}  保留完成={kept}"
-            )
+            self._save({"tasks": tasks,
+                        "updated_at": time.strftime("%Y-%m-%d %H:%M:%S")})
+
+            msg = (f"队列初始化：total={len(tasks)}  "
+                   f"新增={added}  重置={reset}  保留完成={kept}")
+            if restored:
+                msg += f"  日志恢复={restored}"
+            log.info(msg)
+
+            # 清理上一轮遗留的心跳文件
+            for hb in self.queue_dir.glob(f"{self.queue_file.stem}.hb.*"):
+                try:
+                    hb.unlink()
+                except Exception:
+                    pass
+
         finally:
             self._release()
 
-    # ── 认领任务 ────────────────────────────────────────────────
+    # ── 认领任务 ────────────────────────────────────────────────────
     def claim_next(self) -> Optional[tuple[str, str, int]]:
         """原子认领一个 pending 或超时 claimed 的任务。"""
         self._acquire()
@@ -136,17 +218,18 @@ class TaskQueue:
             for src, t in tasks.items():
                 s = t["status"]
                 if s == "pending":
-                    pass   # 直接认领
+                    pass  # 直接认领
                 elif s == "claimed":
-                    age = now - t.get("claimed_at", 0)
-                    if age < HEARTBEAT_TIMEOUT:
-                        continue   # 还活着，跳过
+                    if self._hb_is_alive(t.get("worker", ""),
+                                         t.get("claimed_at", 0)):
+                        continue  # 还活着，跳过
                     log.info(
                         f"超时接手 [{t.get('worker','')}→{self.worker_id}]: "
-                        f"{Path(src).name} ({age:.0f}s)"
+                        f"{Path(src).name} "
+                        f"({now - t.get('claimed_at', 0):.0f}s)"
                     )
                 else:
-                    continue   # done / error，跳过
+                    continue  # done / error，跳过
 
                 t.update({"status": "claimed", "worker": self.worker_id,
                            "claimed_at": now})
@@ -157,20 +240,25 @@ class TaskQueue:
         finally:
             self._release()
 
-    # ── 心跳 ────────────────────────────────────────────────────
+    # ── 心跳：写 per-worker 文件，不碰主 JSON ────────────────────────
     def heartbeat(self, src: str):
-        self._acquire()
+        """
+        更新心跳。写到独立的 per-worker 文件，避免每60秒重写整个队列 JSON。
+        这是减少共享文件系统竞争写的关键优化。
+        """
         try:
-            data = self._load()
-            t = data.get("tasks", {}).get(src)
-            if t and t["status"] == "claimed" and t.get("worker") == self.worker_id:
-                t["claimed_at"] = time.time()
-                self._save(data)
-        finally:
-            self._release()
+            self._hb_path(self.worker_id).write_text(
+                json.dumps({"src": src, "worker": self.worker_id,
+                             "t": time.time()}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
 
-    # ── 标记完成 ────────────────────────────────────────────────
+    # ── 标记完成 ────────────────────────────────────────────────────
     def mark_done(self, src: str, dst: str):
+        # 先追加 done-log（不受主 JSON 损坏影响）
+        self._done_log_append(src, dst)
         self._acquire()
         try:
             data = self._load()
@@ -182,7 +270,7 @@ class TaskQueue:
         finally:
             self._release()
 
-    # ── 标记失败（释放回 pending，最多重试 3 次）────────────────
+    # ── 标记失败（释放回 pending，最多重试 3 次）────────────────────
     def mark_failed(self, src: str, error: str = ""):
         self._acquire()
         try:
@@ -191,7 +279,8 @@ class TaskQueue:
             if t:
                 retries = t.get("retries", 0) + 1
                 if retries >= 3:
-                    t.update({"status": "error", "error": error[:200], "retries": retries})
+                    t.update({"status": "error", "error": error[:200],
+                               "retries": retries})
                     log.warning(f"放弃（重试3次）: {Path(src).name}")
                 else:
                     t.update({"status": "pending", "worker": "",
@@ -201,16 +290,19 @@ class TaskQueue:
         finally:
             self._release()
 
-    # ── 统计 ────────────────────────────────────────────────────
+    # ── 统计 ────────────────────────────────────────────────────────
     def stats(self) -> dict:
         data  = self._load()
         tasks = data.get("tasks", {})
         cnt   = {"pending": 0, "claimed": 0, "done": 0, "error": 0}
-        now   = time.time()
         for t in tasks.values():
             s = t["status"]
-            if s == "claimed" and now - t.get("claimed_at", 0) >= HEARTBEAT_TIMEOUT:
-                cnt["pending"] += 1   # 超时视为 pending
+            if s == "claimed":
+                if self._hb_is_alive(t.get("worker", ""),
+                                     t.get("claimed_at", 0)):
+                    cnt["claimed"] += 1
+                else:
+                    cnt["pending"] += 1  # 心跳超时，视为 pending
             else:
                 cnt[s] = cnt.get(s, 0) + 1
         return cnt
