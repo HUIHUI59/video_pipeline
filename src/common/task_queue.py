@@ -419,15 +419,35 @@ class TaskQueue:
 
     def is_all_done(self) -> bool:
         """
-        要两次连续的 "pending=0 且 claimed=0" 才认定结束。
-        中间 sleep 2s 让 SMB rename 瞬态不要误伤。
+        判断任务全部结束。多层守卫防 SMB rename 瞬态假阳性：
+          1. 第一次 stats 非空 → 直接 False
+          2. JSON 看起来空但 done-log 有条目 → JSON 被并发写搅坏，False
+          3. 间隔 2s 二次 stats 确认，两次都空才判定 True
         """
         s1 = self.stats()
         if s1.get("pending", 0) > 0 or s1.get("claimed", 0) > 0:
             return False
+        # 主 JSON 看起来完全空；用 done-log 交叉核对
+        total_s1 = sum(s1.values())
+        done_log_count = len(self._done_log_read())
+        if total_s1 == 0 and done_log_count > 0:
+            log.warning(
+                f"is_all_done: 主 JSON 显示 0 条任务，但 done-log 有 "
+                f"{done_log_count} 条。判定为 SMB 瞬态错误，继续等待。"
+            )
+            return False
         time.sleep(2)
         s2 = self.stats()
-        return s2.get("pending", 0) == 0 and s2.get("claimed", 0) == 0
+        if s2.get("pending", 0) > 0 or s2.get("claimed", 0) > 0:
+            return False
+        # 二次检查也看一下 done-log
+        if sum(s2.values()) == 0 and len(self._done_log_read()) > 0:
+            log.warning(
+                "is_all_done: 二次检查仍为 0 但 done-log 非空，"
+                "继续等待。"
+            )
+            return False
+        return True
 
     def pending_count(self) -> int:
         return self.stats().get("pending", 0)
