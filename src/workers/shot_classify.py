@@ -339,13 +339,23 @@ def run_queue(queue, manifest_dir: str, workers: int,
 
             def submit_next():
                 if stop_ev.is_set(): return False
-                item = queue.claim_next()
+                try:
+                    item = queue.claim_next()
+                except Exception as e:
+                    log.warning(f"claim_next 异常 ({e})，稍后重试")
+                    return False
                 if item is None: return False
                 src, _, _idx = item
-                fut = pool.submit(classify_one, src, manifest_dir,
-                                  model_path, face_conf,
-                                  single_ratio, wide_ratio,
-                                  DEFAULT_SAMPLE_FRACS, queue)
+                try:
+                    fut = pool.submit(classify_one, src, manifest_dir,
+                                      model_path, face_conf,
+                                      single_ratio, wide_ratio,
+                                      DEFAULT_SAMPLE_FRACS, queue)
+                except Exception as e:
+                    log.error(f"submit 异常 ({e})，释放 claim 后重试")
+                    try: queue.mark_failed(src, f"submit error: {e}")
+                    except Exception: pass
+                    return False
                 pending_futs[fut] = src
                 with hb_lock: current[fut] = src
                 return True
@@ -354,39 +364,54 @@ def run_queue(queue, manifest_dir: str, workers: int,
                 if not submit_next(): break
 
             while not stop_ev.is_set():
-                if pending_futs:
-                    done_set, _ = concurrent.futures.wait(
-                        pending_futs, timeout=5,
-                        return_when=concurrent.futures.FIRST_COMPLETED)
-                    for fut in done_set:
-                        src = pending_futs.pop(fut)
-                        with hb_lock: current.pop(fut, None)
-                        try: res = fut.result()
-                        except Exception as e:
-                            res = ClassifyResult(src_path=src, error=str(e))
-                            queue.mark_failed(src, str(e))
-                        if res.success:
-                            counts["ok"] += 1
-                            counts[res.category] = counts.get(res.category, 0) + 1
-                            icon = "✅"
-                            detail = f"{res.category} n={res.num_people}"
-                        else:
-                            counts["err"] += 1
-                            icon = "❌"
-                            detail = f"ERR:{res.error[:60]}"
-                        log.info(f"{icon} {Path(res.src_path).name}  {detail}"
-                                 + (f" [{res.duration_s:.1f}s]" if res.duration_s else ""))
-                        s2 = queue.stats()
-                        prog.update(pid,
-                                    completed=s2.get("done", 0),
-                                    extra=f"done={s2.get('done',0)} "
-                                          f"pending={s2.get('pending',0)}")
-                        if not stop_ev.is_set(): submit_next()
+                try:
+                    if pending_futs:
+                        done_set, _ = concurrent.futures.wait(
+                            pending_futs, timeout=5,
+                            return_when=concurrent.futures.FIRST_COMPLETED)
+                        for fut in done_set:
+                            src = pending_futs.pop(fut)
+                            with hb_lock: current.pop(fut, None)
+                            try: res = fut.result()
+                            except Exception as e:
+                                res = ClassifyResult(src_path=src, error=str(e))
+                                try: queue.mark_failed(src, str(e))
+                                except Exception as ee:
+                                    log.warning(f"mark_failed 异常 ({ee})")
+                            if res.success:
+                                counts["ok"] += 1
+                                counts[res.category] = counts.get(res.category, 0) + 1
+                                icon = "✅"
+                                detail = f"{res.category} n={res.num_people}"
+                            else:
+                                counts["err"] += 1
+                                icon = "❌"
+                                detail = f"ERR:{res.error[:60]}"
+                            log.info(f"{icon} {Path(res.src_path).name}  {detail}"
+                                     + (f" [{res.duration_s:.1f}s]" if res.duration_s else ""))
+                            try:
+                                s2 = queue.stats()
+                                prog.update(pid,
+                                            completed=s2.get("done", 0),
+                                            extra=f"done={s2.get('done',0)} "
+                                                  f"pending={s2.get('pending',0)}")
+                            except Exception as e:
+                                log.warning(f"progress update 异常 ({e})")
+                            if not stop_ev.is_set(): submit_next()
 
-                if not pending_futs:
-                    if queue.is_all_done(): break
-                    time.sleep(8)
-                    submit_next()
+                    if not pending_futs:
+                        done = False
+                        try:
+                            done = queue.is_all_done()
+                        except Exception as e:
+                            log.warning(f"is_all_done 异常 ({e})，保守继续等待")
+                        if done: break
+                        time.sleep(8)
+                        submit_next()
+                except Exception as e:
+                    # 任何未预料的异常：记日志，sleep 一下，继续主循环（永不崩）
+                    log.error(f"run_queue 主循环异常 ({e})，5s 后继续")
+                    time.sleep(5)
 
     return counts
 

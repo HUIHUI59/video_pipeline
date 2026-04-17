@@ -80,41 +80,70 @@ class TaskQueue:
             log.error(f"队列文件无法解析，重置为空: {self.queue_file}")
             return {"tasks": {}}
 
-    def _save(self, data: dict):
+    def _save(self, data: dict) -> bool:
         """
-        原子写主 JSON。SMB/CIFS 上 write-behind 缓存会导致 write_text 返回后
-        .tmp 在 NAS 上还没真正落地，紧接着 rename 会 ENOENT。三层防护：
-          1. 用 open+fsync 强制 flush 到 NAS 后再 rename
-          2. rename 失败 → 直接 write_text 到 .json
-          3. rename 后 .json 若仍不存在 → 用 payload 补写
-        done-log 是最终保险（append-only，不经 rename）。
+        尽力写主 JSON。**任何异常都不外抛**，失败返回 False（只记日志）。
+        done-log 是真正的 source of truth；JSON 只是"最近一次快照"视图。
+
+        尝试策略（最多 3 轮，每轮三步）：
+          1. 写 <pid>.tmp + fsync
+          2. tmp.replace(.json)
+          3. 如果 rename 失败或 .json 不存在，直接 write_text(.json)
+        每轮失败 sleep 递增后重试。
         """
         tmp = self.queue_file.with_name(
             f"{self.queue_file.stem}.{os.getpid()}.tmp"
         )
-        payload = json.dumps(data, ensure_ascii=False, indent=2)
-        # fsync 强制把 SMB 客户端的脏页推到服务器
-        with open(tmp, "w", encoding="utf-8") as f:
-            f.write(payload)
-            f.flush()
-            try: os.fsync(f.fileno())
-            except OSError: pass
         try:
-            tmp.replace(self.queue_file)
+            payload = json.dumps(data, ensure_ascii=False, indent=2)
         except Exception as e:
-            log.warning(f"_save rename 失败 ({e})，改为直接覆盖写 .json")
+            log.error(f"_save: json.dumps 失败 ({e})，跳过保存")
+            return False
+
+        last_err: str = ""
+        for attempt in range(3):
             try:
-                self.queue_file.write_text(payload, encoding="utf-8")
-            finally:
-                try: tmp.unlink(missing_ok=True)
-                except Exception: pass
-            return
-        if not self.queue_file.exists():
-            log.warning("_save rename 后 .json 不存在，用 payload 补写")
-            try:
-                self.queue_file.write_text(payload, encoding="utf-8")
+                # 1) 写 tmp + fsync
+                try:
+                    with open(tmp, "w", encoding="utf-8") as f:
+                        f.write(payload)
+                        f.flush()
+                        try: os.fsync(f.fileno())
+                        except OSError: pass
+                except Exception as e:
+                    last_err = f"write tmp: {e}"
+                    raise
+
+                # 2) rename tmp → .json
+                try:
+                    tmp.replace(self.queue_file)
+                    if self.queue_file.exists():
+                        return True
+                    last_err = "rename ok but .json missing"
+                except Exception as e:
+                    last_err = f"rename: {e}"
+
+                # 3) 直接覆盖写 .json
+                try:
+                    self.queue_file.write_text(payload, encoding="utf-8")
+                    if self.queue_file.exists():
+                        try: tmp.unlink(missing_ok=True)
+                        except Exception: pass
+                        return True
+                    last_err += " | direct write ok but file still missing"
+                except Exception as e:
+                    last_err += f" | direct write: {e}"
+
             except Exception:
-                pass
+                pass  # last_err 已记录，回到外层 backoff
+
+            # backoff
+            time.sleep(0.3 * (2 ** attempt))  # 0.3s, 0.6s, 1.2s
+
+        log.error(f"_save 三次尝试都失败，跳过（done-log 兜底）: {last_err}")
+        try: tmp.unlink(missing_ok=True)
+        except Exception: pass
+        return False
 
     # ── done-log：追加写，不替换文件 ────────────────────────────────
     def _done_log_append(self, src: str, dst: str):
@@ -302,51 +331,58 @@ class TaskQueue:
     # ── 认领任务 ────────────────────────────────────────────────────
     def claim_next(self) -> Optional[tuple[str, str, int]]:
         """
-        原子认领一个 pending 或超时 claimed 的任务。
+        原子认领一个 pending 或超时 claimed 的任务。任何 SMB 异常都不外抛，
+        失败时返回 None，下一轮再试。
 
         三重屏障（从外到内）：
           1. fcntl.flock（同机多进程有效，SMB 跨机不可靠）
           2. _try_claim_file 用 O_CREAT|O_EXCL（跨机原子，SMB 可靠）
           3. done-log 查询，防止已 done 的又被重新认领
         """
-        self._acquire()
         try:
-            data  = self._load()
-            tasks = data.get("tasks", {})
-            # done-log 是最权威的 "已完成" 视图，防止主 JSON 落后导致重跑
-            done_set = set(self._done_log_read().keys())
-            now   = time.time()
-
-            for src, t in tasks.items():
-                if src in done_set:
-                    continue
-                s = t["status"]
-                if s == "pending":
-                    pass
-                elif s == "claimed":
-                    if self._hb_is_alive(t.get("worker", ""),
-                                         t.get("claimed_at", 0)):
-                        continue
-                    log.info(
-                        f"超时接手 [{t.get('worker','')}→{self.worker_id}]: "
-                        f"{Path(src).name} "
-                        f"({now - t.get('claimed_at', 0):.0f}s)"
-                    )
-                else:
-                    continue  # done / error
-
-                # 跨机原子 claim
-                if not self._try_claim_file(src):
-                    continue  # 被别的 worker 抢走了
-
-                t.update({"status": "claimed", "worker": self.worker_id,
-                           "claimed_at": now})
-                self._save(data)
-                return src, t.get("dst", ""), t["output_idx"]
-
+            self._acquire()
+        except Exception as e:
+            log.warning(f"claim_next 获取锁失败 ({e})")
             return None
+        try:
+            try:
+                data  = self._load()
+                tasks = data.get("tasks", {})
+                done_set = set(self._done_log_read().keys())
+                now = time.time()
+
+                for src, t in tasks.items():
+                    if src in done_set:
+                        continue
+                    s = t.get("status", "")
+                    if s == "pending":
+                        pass
+                    elif s == "claimed":
+                        if self._hb_is_alive(t.get("worker", ""),
+                                             t.get("claimed_at", 0)):
+                            continue
+                        log.info(
+                            f"超时接手 [{t.get('worker','')}→{self.worker_id}]: "
+                            f"{Path(src).name} "
+                            f"({now - t.get('claimed_at', 0):.0f}s)"
+                        )
+                    else:
+                        continue
+
+                    if not self._try_claim_file(src):
+                        continue
+
+                    t.update({"status": "claimed", "worker": self.worker_id,
+                               "claimed_at": now})
+                    self._save(data)  # 失败也没关系（返回 False，但 claim 文件已持有）
+                    return src, t.get("dst", ""), t.get("output_idx", 0)
+                return None
+            except Exception as e:
+                log.warning(f"claim_next 内部异常 ({e})，本轮返回 None 下次再试")
+                return None
         finally:
-            self._release()
+            try: self._release()
+            except Exception: pass
 
     # ── 心跳：写 per-worker 文件，不碰主 JSON ────────────────────────
     def heartbeat(self, src: str):
@@ -365,89 +401,119 @@ class TaskQueue:
 
     # ── 标记完成 ────────────────────────────────────────────────────
     def mark_done(self, src: str, dst: str):
-        # 先追加 done-log（不受主 JSON 损坏影响）
-        self._done_log_append(src, dst)
-        self._release_claim(src)
-        self._acquire()
+        """
+        标记完成。done-log 是 authoritative；主 JSON 更新是 best-effort。
+        任何异常都被吞掉（log + 继续）—— 保证 worker 不会因 queue bug 崩溃。
+        """
         try:
-            data = self._load()
-            if src in data.get("tasks", {}):
-                data["tasks"][src].update({
-                    "status": "done", "dst": dst, "done_at": time.time(),
-                })
-                self._save(data)
+            self._done_log_append(src, dst)
+            self._release_claim(src)
+        except Exception as e:
+            log.warning(f"mark_done: done-log/claim 处理异常 ({e})")
+        try:
+            self._acquire()
+        except Exception as e:
+            log.warning(f"mark_done 获取锁失败 ({e})，跳过主 JSON 更新")
+            return
+        try:
+            try:
+                data = self._load()
+                if src in data.get("tasks", {}):
+                    data["tasks"][src].update({
+                        "status": "done", "dst": dst, "done_at": time.time(),
+                    })
+                    self._save(data)
+            except Exception as e:
+                log.warning(f"mark_done 主 JSON 更新异常 ({e})，done-log 已落")
         finally:
-            self._release()
+            try: self._release()
+            except Exception: pass
 
     # ── 标记失败（释放回 pending，最多重试 3 次）────────────────────
     def mark_failed(self, src: str, error: str = ""):
-        self._release_claim(src)
-        self._acquire()
+        """
+        标记失败。任何异常都吞掉，保证 worker 不因此崩溃。
+        """
         try:
-            data = self._load()
-            t = data.get("tasks", {}).get(src)
-            if t:
-                retries = t.get("retries", 0) + 1
-                if retries >= 3:
-                    t.update({"status": "error", "error": error[:200],
-                               "retries": retries})
-                    log.warning(f"放弃（重试3次）: {Path(src).name}")
-                else:
-                    t.update({"status": "pending", "worker": "",
-                               "claimed_at": 0.0, "retries": retries})
-                    log.info(f"释放回队列（第{retries}次）: {Path(src).name}")
-                self._save(data)
+            self._release_claim(src)
+        except Exception: pass
+        try:
+            self._acquire()
+        except Exception as e:
+            log.warning(f"mark_failed 获取锁失败 ({e})")
+            return
+        try:
+            try:
+                data = self._load()
+                t = data.get("tasks", {}).get(src)
+                if t:
+                    retries = t.get("retries", 0) + 1
+                    if retries >= 3:
+                        t.update({"status": "error", "error": (error or "")[:200],
+                                   "retries": retries})
+                        log.warning(f"放弃（重试3次）: {Path(src).name}")
+                    else:
+                        t.update({"status": "pending", "worker": "",
+                                   "claimed_at": 0.0, "retries": retries})
+                        log.info(f"释放回队列（第{retries}次）: {Path(src).name}")
+                    self._save(data)
+            except Exception as e:
+                log.warning(f"mark_failed 主 JSON 更新异常 ({e})")
         finally:
-            self._release()
+            try: self._release()
+            except Exception: pass
 
     # ── 统计 ────────────────────────────────────────────────────────
     def stats(self) -> dict:
-        data  = self._load()
-        tasks = data.get("tasks", {})
-        cnt   = {"pending": 0, "claimed": 0, "done": 0, "error": 0}
-        for t in tasks.values():
-            s = t["status"]
-            if s == "claimed":
-                if self._hb_is_alive(t.get("worker", ""),
-                                     t.get("claimed_at", 0)):
-                    cnt["claimed"] += 1
-                else:
-                    cnt["pending"] += 1  # 心跳超时，视为 pending
-            else:
-                cnt[s] = cnt.get(s, 0) + 1
+        """读主 JSON 统计各状态。异常不外抛，返回全 0。"""
+        cnt = {"pending": 0, "claimed": 0, "done": 0, "error": 0}
+        try:
+            data  = self._load()
+            tasks = data.get("tasks", {})
+            for t in tasks.values():
+                s = t.get("status", "")
+                if s == "claimed":
+                    if self._hb_is_alive(t.get("worker", ""),
+                                         t.get("claimed_at", 0)):
+                        cnt["claimed"] += 1
+                    else:
+                        cnt["pending"] += 1
+                elif s in cnt:
+                    cnt[s] += 1
+        except Exception as e:
+            log.warning(f"stats 读 JSON 异常 ({e})，返回全 0")
         return cnt
 
     def is_all_done(self) -> bool:
         """
-        判断任务全部结束。多层守卫防 SMB rename 瞬态假阳性：
-          1. 第一次 stats 非空 → 直接 False
-          2. JSON 看起来空但 done-log 有条目 → JSON 被并发写搅坏，False
-          3. 间隔 2s 二次 stats 确认，两次都空才判定 True
+        判断任务全部结束。多层守卫防 SMB rename 瞬态假阳性。异常一律返回 False
+        （保守，不要因为偶发 SMB 抖动让 worker 误判结束）。
         """
-        s1 = self.stats()
-        if s1.get("pending", 0) > 0 or s1.get("claimed", 0) > 0:
+        try:
+            s1 = self.stats()
+            if s1.get("pending", 0) > 0 or s1.get("claimed", 0) > 0:
+                return False
+            total_s1 = sum(s1.values())
+            done_log_count = len(self._done_log_read())
+            if total_s1 == 0 and done_log_count > 0:
+                log.warning(
+                    f"is_all_done: 主 JSON 显示 0 条任务，但 done-log 有 "
+                    f"{done_log_count} 条。判定为 SMB 瞬态错误，继续等待。"
+                )
+                return False
+            time.sleep(2)
+            s2 = self.stats()
+            if s2.get("pending", 0) > 0 or s2.get("claimed", 0) > 0:
+                return False
+            if sum(s2.values()) == 0 and len(self._done_log_read()) > 0:
+                log.warning(
+                    "is_all_done: 二次检查仍为 0 但 done-log 非空，继续等待。"
+                )
+                return False
+            return True
+        except Exception as e:
+            log.warning(f"is_all_done 异常 ({e})，保守判定未完成")
             return False
-        # 主 JSON 看起来完全空；用 done-log 交叉核对
-        total_s1 = sum(s1.values())
-        done_log_count = len(self._done_log_read())
-        if total_s1 == 0 and done_log_count > 0:
-            log.warning(
-                f"is_all_done: 主 JSON 显示 0 条任务，但 done-log 有 "
-                f"{done_log_count} 条。判定为 SMB 瞬态错误，继续等待。"
-            )
-            return False
-        time.sleep(2)
-        s2 = self.stats()
-        if s2.get("pending", 0) > 0 or s2.get("claimed", 0) > 0:
-            return False
-        # 二次检查也看一下 done-log
-        if sum(s2.values()) == 0 and len(self._done_log_read()) > 0:
-            log.warning(
-                "is_all_done: 二次检查仍为 0 但 done-log 非空，"
-                "继续等待。"
-            )
-            return False
-        return True
 
     def pending_count(self) -> int:
         return self.stats().get("pending", 0)
