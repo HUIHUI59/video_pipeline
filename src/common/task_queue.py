@@ -227,6 +227,42 @@ class TaskQueue:
         try: self._claim_path(src).unlink(missing_ok=True)
         except Exception: pass
 
+    # ── per-task 失败标记（不碰主 JSON）────────────────────────────
+    def _fail_hash(self, src: str) -> str:
+        return hashlib.sha1(src.encode("utf-8", errors="ignore")).hexdigest()[:16]
+
+    def _fail_prefix(self, src: str) -> str:
+        return f"{self.queue_file.stem}.fail.{self._fail_hash(src)}"
+
+    def _fail_append(self, src: str, error: str = "") -> int:
+        """为一次失败创建一个标记文件。返回当前累计失败次数。"""
+        prefix = self._fail_prefix(src)
+        ts = int(time.time() * 1000)
+        marker = self.queue_dir / f"{prefix}.{ts}"
+        try:
+            marker.write_text(
+                (error or "")[:400], encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+        return self._fail_count(src)
+
+    def _fail_count(self, src: str) -> int:
+        try:
+            return sum(1 for _ in self.queue_dir.glob(
+                f"{self._fail_prefix(src)}.*"))
+        except Exception:
+            return 0
+
+    def _purge_fails(self) -> int:
+        cnt = 0
+        for f in self.queue_dir.glob(f"{self.queue_file.stem}.fail.*"):
+            try:
+                f.unlink()
+                cnt += 1
+            except Exception:
+                pass
+        return cnt
+
     # ── per-worker 心跳文件 ──────────────────────────────────────────
     def _hb_path(self, worker_id: str) -> Path:
         safe = worker_id.replace("/", "_").replace("\\", "_").replace(":", "_")
@@ -315,29 +351,28 @@ class TaskQueue:
                 msg += f"  日志恢复={restored}"
             log.info(msg)
 
-            # 清理上一轮遗留的心跳文件 + claim 文件
+            # 清理上一轮遗留的 hb / claim / fail 标记
             for hb in self.queue_dir.glob(f"{self.queue_file.stem}.hb.*"):
-                try:
-                    hb.unlink()
-                except Exception:
-                    pass
-            purged = self._purge_claims()
-            if purged:
-                log.info(f"清理遗留 claim 文件 {purged} 个")
+                try: hb.unlink()
+                except Exception: pass
+            purged_c = self._purge_claims()
+            purged_f = self._purge_fails() if force else 0
+            if purged_c or purged_f:
+                log.info(f"清理遗留 claim={purged_c} fail={purged_f}")
 
         finally:
             self._release()
 
-    # ── 认领任务 ────────────────────────────────────────────────────
+    # ── 认领任务（filesystem-first，运行时不写主 JSON）──────────────
     def claim_next(self) -> Optional[tuple[str, str, int]]:
         """
-        原子认领一个 pending 或超时 claimed 的任务。任何 SMB 异常都不外抛，
-        失败时返回 None，下一轮再试。
+        核心设计：主 JSON 是 init_queue 写一次的静态快照；运行时的真实状态都
+        存在 filesystem primitives 上：
+          - done-log  = 已完成（append-only，authoritative）
+          - .claim.*  = 已认领（O_CREAT|O_EXCL 原子，跨机可靠）
+          - .fail.*   = 失败标记（每次 mark_failed 追加一个），计数 ≥3 视为 error
 
-        三重屏障（从外到内）：
-          1. fcntl.flock（同机多进程有效，SMB 跨机不可靠）
-          2. _try_claim_file 用 O_CREAT|O_EXCL（跨机原子，SMB 可靠）
-          3. done-log 查询，防止已 done 的又被重新认领
+        这样 **运行时完全不会写 60MB 的主 JSON**，彻底消掉 SMB 并发写竞争。
         """
         try:
             self._acquire()
@@ -348,34 +383,24 @@ class TaskQueue:
             try:
                 data  = self._load()
                 tasks = data.get("tasks", {})
+                if not isinstance(tasks, dict):
+                    log.warning("claim_next: tasks 非 dict（JSON 损坏？），返回 None")
+                    return None
                 done_set = set(self._done_log_read().keys())
-                now = time.time()
 
                 for src, t in tasks.items():
+                    # t 可能因 JSON 损坏不是 dict——防御一下
+                    if not isinstance(t, dict):
+                        continue
                     if src in done_set:
                         continue
-                    s = t.get("status", "")
-                    if s == "pending":
-                        pass
-                    elif s == "claimed":
-                        if self._hb_is_alive(t.get("worker", ""),
-                                             t.get("claimed_at", 0)):
-                            continue
-                        log.info(
-                            f"超时接手 [{t.get('worker','')}→{self.worker_id}]: "
-                            f"{Path(src).name} "
-                            f"({now - t.get('claimed_at', 0):.0f}s)"
-                        )
-                    else:
+                    # 达到最大重试次数 → 视为永久失败，跳过
+                    if self._fail_count(src) >= 3:
                         continue
-
+                    # 跨机原子 claim（若被别人抢走或自己已 claim，返回 False）
                     if not self._try_claim_file(src):
                         continue
-
-                    t.update({"status": "claimed", "worker": self.worker_id,
-                               "claimed_at": now})
-                    self._save(data)  # 失败也没关系（返回 False，但 claim 文件已持有）
-                    return src, t.get("dst", ""), t.get("output_idx", 0)
+                    return src, "", 0
                 return None
             except Exception as e:
                 log.warning(f"claim_next 内部异常 ({e})，本轮返回 None 下次再试")
@@ -399,89 +424,93 @@ class TaskQueue:
         except Exception:
             pass
 
-    # ── 标记完成 ────────────────────────────────────────────────────
+    # ── 标记完成（只动 filesystem，不动主 JSON）─────────────────────
     def mark_done(self, src: str, dst: str):
         """
-        标记完成。done-log 是 authoritative；主 JSON 更新是 best-effort。
-        任何异常都被吞掉（log + 继续）—— 保证 worker 不会因 queue bug 崩溃。
+        完成时仅动 filesystem：
+          1. 追加 done-log（append-only，authoritative）
+          2. 删除 claim 文件
+        主 JSON 不碰（静态快照，只在 init 时写）。
         """
-        try:
-            self._done_log_append(src, dst)
-            self._release_claim(src)
-        except Exception as e:
-            log.warning(f"mark_done: done-log/claim 处理异常 ({e})")
-        try:
-            self._acquire()
-        except Exception as e:
-            log.warning(f"mark_done 获取锁失败 ({e})，跳过主 JSON 更新")
-            return
-        try:
-            try:
-                data = self._load()
-                if src in data.get("tasks", {}):
-                    data["tasks"][src].update({
-                        "status": "done", "dst": dst, "done_at": time.time(),
-                    })
-                    self._save(data)
-            except Exception as e:
-                log.warning(f"mark_done 主 JSON 更新异常 ({e})，done-log 已落")
-        finally:
-            try: self._release()
-            except Exception: pass
+        try: self._done_log_append(src, dst)
+        except Exception as e: log.warning(f"mark_done done-log 异常 ({e})")
+        try: self._release_claim(src)
+        except Exception: pass
 
-    # ── 标记失败（释放回 pending，最多重试 3 次）────────────────────
+    # ── 标记失败（只动 filesystem，不动主 JSON）─────────────────────
     def mark_failed(self, src: str, error: str = ""):
         """
-        标记失败。任何异常都吞掉，保证 worker 不因此崩溃。
+        失败时仅动 filesystem：
+          1. 写一个 .fail.<hash>.<ms_epoch> 标记文件（计数失败次数）
+          2. 删除 claim 文件（释放回可认领状态）
+        累计 ≥3 次失败的任务在 claim_next 里会被自动跳过（视作 error）。
         """
-        try:
-            self._release_claim(src)
+        try: self._release_claim(src)
         except Exception: pass
         try:
-            self._acquire()
+            retries = self._fail_append(src, error)
+            if retries >= 3:
+                log.warning(f"放弃（重试 {retries} 次）: {Path(src).name}")
+            else:
+                log.info(f"释放回队列（第{retries}次）: {Path(src).name}")
         except Exception as e:
-            log.warning(f"mark_failed 获取锁失败 ({e})")
-            return
-        try:
-            try:
-                data = self._load()
-                t = data.get("tasks", {}).get(src)
-                if t:
-                    retries = t.get("retries", 0) + 1
-                    if retries >= 3:
-                        t.update({"status": "error", "error": (error or "")[:200],
-                                   "retries": retries})
-                        log.warning(f"放弃（重试3次）: {Path(src).name}")
-                    else:
-                        t.update({"status": "pending", "worker": "",
-                                   "claimed_at": 0.0, "retries": retries})
-                        log.info(f"释放回队列（第{retries}次）: {Path(src).name}")
-                    self._save(data)
-            except Exception as e:
-                log.warning(f"mark_failed 主 JSON 更新异常 ({e})")
-        finally:
-            try: self._release()
-            except Exception: pass
+            log.warning(f"mark_failed 写 fail 标记异常 ({e})")
 
-    # ── 统计 ────────────────────────────────────────────────────────
+    # ── 统计（filesystem 派生）──────────────────────────────────────
     def stats(self) -> dict:
-        """读主 JSON 统计各状态。异常不外抛，返回全 0。"""
+        """
+        从 filesystem 派生当前状态：
+          - total  = 主 JSON 里 tasks 的条目数
+          - done   = done-log 去重后条目数（authoritative）
+          - claimed = 存活 claim 文件数
+          - error  = 累计 ≥3 次 fail 的任务数
+          - pending = total - done - claimed - error
+        异常不外抛，返回全 0。
+        """
         cnt = {"pending": 0, "claimed": 0, "done": 0, "error": 0}
         try:
-            data  = self._load()
+            data = self._load()
             tasks = data.get("tasks", {})
-            for t in tasks.values():
-                s = t.get("status", "")
-                if s == "claimed":
-                    if self._hb_is_alive(t.get("worker", ""),
-                                         t.get("claimed_at", 0)):
-                        cnt["claimed"] += 1
-                    else:
-                        cnt["pending"] += 1
-                elif s in cnt:
-                    cnt[s] += 1
+            if not isinstance(tasks, dict):
+                return cnt
+            total = len(tasks)
+            done_set = set(self._done_log_read().keys())
+            cnt["done"] = len(done_set & set(tasks.keys()))
+
+            # 活的 claim 计数
+            alive_claimed = 0
+            for cp in self.queue_dir.glob(f"{self.queue_file.stem}.claim.*"):
+                try:
+                    d = json.loads(cp.read_text(encoding="utf-8"))
+                    if self._hb_is_alive(d.get("worker", ""), d.get("t", 0)):
+                        alive_claimed += 1
+                except Exception:
+                    pass
+            cnt["claimed"] = alive_claimed
+
+            # error：按 hash 分组，任意前缀出现 ≥3 次视为 error
+            fail_hashes: dict[str, int] = {}
+            for f in self.queue_dir.glob(f"{self.queue_file.stem}.fail.*"):
+                name = f.name  # classify_queue.fail.<hash>.<ms>
+                parts = name.rsplit(".", 2)
+                if len(parts) == 3:
+                    prefix_body = parts[0]  # "classify_queue.fail.<hash>"
+                    h = prefix_body.rsplit(".", 1)[-1]
+                    fail_hashes[h] = fail_hashes.get(h, 0) + 1
+            # 仅统计哈希命中 tasks 且计数 ≥3 的
+            err = 0
+            if fail_hashes:
+                task_hash_map = {self._fail_hash(s): s for s in tasks.keys()}
+                for h, c in fail_hashes.items():
+                    if c >= 3 and h in task_hash_map:
+                        src = task_hash_map[h]
+                        if src not in done_set:
+                            err += 1
+            cnt["error"] = err
+
+            cnt["pending"] = max(0, total - cnt["done"] - cnt["claimed"] - cnt["error"])
         except Exception as e:
-            log.warning(f"stats 读 JSON 异常 ({e})，返回全 0")
+            log.warning(f"stats 派生状态异常 ({e})，返回全 0")
         return cnt
 
     def is_all_done(self) -> bool:
