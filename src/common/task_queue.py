@@ -22,7 +22,7 @@ v3.0 关键改进（解决共享网络文件系统上的队列数据丢失问题
 ════════════════════════════════════════════════════════════════
 """
 
-import os, json, time, fcntl, socket, logging
+import os, json, time, fcntl, socket, logging, hashlib
 from pathlib import Path
 from typing import Optional
 
@@ -81,11 +81,40 @@ class TaskQueue:
             return {"tasks": {}}
 
     def _save(self, data: dict):
+        """
+        原子写主 JSON。SMB/CIFS 上 write-behind 缓存会导致 write_text 返回后
+        .tmp 在 NAS 上还没真正落地，紧接着 rename 会 ENOENT。三层防护：
+          1. 用 open+fsync 强制 flush 到 NAS 后再 rename
+          2. rename 失败 → 直接 write_text 到 .json
+          3. rename 后 .json 若仍不存在 → 用 payload 补写
+        done-log 是最终保险（append-only，不经 rename）。
+        """
         tmp = self.queue_file.with_name(
             f"{self.queue_file.stem}.{os.getpid()}.tmp"
         )
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(self.queue_file)
+        payload = json.dumps(data, ensure_ascii=False, indent=2)
+        # fsync 强制把 SMB 客户端的脏页推到服务器
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(payload)
+            f.flush()
+            try: os.fsync(f.fileno())
+            except OSError: pass
+        try:
+            tmp.replace(self.queue_file)
+        except Exception as e:
+            log.warning(f"_save rename 失败 ({e})，改为直接覆盖写 .json")
+            try:
+                self.queue_file.write_text(payload, encoding="utf-8")
+            finally:
+                try: tmp.unlink(missing_ok=True)
+                except Exception: pass
+            return
+        if not self.queue_file.exists():
+            log.warning("_save rename 后 .json 不存在，用 payload 补写")
+            try:
+                self.queue_file.write_text(payload, encoding="utf-8")
+            except Exception:
+                pass
 
     # ── done-log：追加写，不替换文件 ────────────────────────────────
     def _done_log_append(self, src: str, dst: str):
@@ -119,6 +148,56 @@ class TaskQueue:
             pass
         return done
 
+    # ── per-task claim 文件（跨机原子，通过 O_CREAT|O_EXCL）──────────
+    #
+    # fcntl.flock 在 SMB/CIFS 跨机挂载上不可靠；但 O_CREAT|O_EXCL
+    # 映射到 SMB CreateDisposition=FILE_CREATE，是跨机原子的。
+    # 每个 task 用 sha1(src)[:16] 做个独立的 claim 文件，存在就代表被认领。
+    def _claim_path(self, src: str) -> Path:
+        h = hashlib.sha1(src.encode("utf-8", errors="ignore")).hexdigest()[:16]
+        return self.queue_dir / f"{self.queue_file.stem}.claim.{h}"
+
+    def _try_claim_file(self, src: str) -> bool:
+        """
+        尝试原子创建 claim 文件。成功返回 True，已存在返回 False。
+        存在但 owner 死亡（心跳超时）→ 抢占式删除后重试。
+        """
+        cp = self._claim_path(src)
+        for attempt in range(2):
+            try:
+                fd = os.open(str(cp),
+                             os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+                try:
+                    os.write(fd, json.dumps({
+                        "src": src, "worker": self.worker_id,
+                        "t": time.time(),
+                    }, ensure_ascii=False).encode("utf-8"))
+                    try: os.fsync(fd)
+                    except OSError: pass
+                finally:
+                    os.close(fd)
+                return True
+            except FileExistsError:
+                # 检查现有 claim 是不是已死
+                try:
+                    old = json.loads(cp.read_text(encoding="utf-8"))
+                    if not self._hb_is_alive(old.get("worker", ""),
+                                             old.get("t", 0)):
+                        try: cp.unlink(missing_ok=True)
+                        except Exception: pass
+                        continue   # 重试一次
+                except Exception:
+                    pass
+                return False
+            except Exception as e:
+                log.warning(f"_try_claim_file 异常 ({e})")
+                return False
+        return False
+
+    def _release_claim(self, src: str) -> None:
+        try: self._claim_path(src).unlink(missing_ok=True)
+        except Exception: pass
+
     # ── per-worker 心跳文件 ──────────────────────────────────────────
     def _hb_path(self, worker_id: str) -> Path:
         safe = worker_id.replace("/", "_").replace("\\", "_").replace(":", "_")
@@ -133,6 +212,17 @@ class TaskQueue:
         except Exception:
             # 心跳文件不存在或损坏 → 回退到 claimed_at（兼容旧版 worker）
             return time.time() - claimed_at < HEARTBEAT_TIMEOUT
+
+    # ── 清理所有 claim 文件（init_queue 调用时扫走孤儿）────────────
+    def _purge_claims(self) -> int:
+        cnt = 0
+        for cp in self.queue_dir.glob(f"{self.queue_file.stem}.claim.*"):
+            try:
+                cp.unlink()
+                cnt += 1
+            except Exception:
+                pass
+        return cnt
 
     # ── 初始化队列 ──────────────────────────────────────────────────
     def init_queue(self, src_files: list[str], start_idx: int = 1,
@@ -196,40 +286,58 @@ class TaskQueue:
                 msg += f"  日志恢复={restored}"
             log.info(msg)
 
-            # 清理上一轮遗留的心跳文件
+            # 清理上一轮遗留的心跳文件 + claim 文件
             for hb in self.queue_dir.glob(f"{self.queue_file.stem}.hb.*"):
                 try:
                     hb.unlink()
                 except Exception:
                     pass
+            purged = self._purge_claims()
+            if purged:
+                log.info(f"清理遗留 claim 文件 {purged} 个")
 
         finally:
             self._release()
 
     # ── 认领任务 ────────────────────────────────────────────────────
     def claim_next(self) -> Optional[tuple[str, str, int]]:
-        """原子认领一个 pending 或超时 claimed 的任务。"""
+        """
+        原子认领一个 pending 或超时 claimed 的任务。
+
+        三重屏障（从外到内）：
+          1. fcntl.flock（同机多进程有效，SMB 跨机不可靠）
+          2. _try_claim_file 用 O_CREAT|O_EXCL（跨机原子，SMB 可靠）
+          3. done-log 查询，防止已 done 的又被重新认领
+        """
         self._acquire()
         try:
             data  = self._load()
             tasks = data.get("tasks", {})
+            # done-log 是最权威的 "已完成" 视图，防止主 JSON 落后导致重跑
+            done_set = set(self._done_log_read().keys())
             now   = time.time()
 
             for src, t in tasks.items():
+                if src in done_set:
+                    continue
                 s = t["status"]
                 if s == "pending":
-                    pass  # 直接认领
+                    pass
                 elif s == "claimed":
                     if self._hb_is_alive(t.get("worker", ""),
                                          t.get("claimed_at", 0)):
-                        continue  # 还活着，跳过
+                        continue
                     log.info(
                         f"超时接手 [{t.get('worker','')}→{self.worker_id}]: "
                         f"{Path(src).name} "
                         f"({now - t.get('claimed_at', 0):.0f}s)"
                     )
                 else:
-                    continue  # done / error，跳过
+                    continue  # done / error
+
+                # 跨机原子 claim
+                if not self._try_claim_file(src):
+                    continue  # 被别的 worker 抢走了
 
                 t.update({"status": "claimed", "worker": self.worker_id,
                            "claimed_at": now})
@@ -259,10 +367,11 @@ class TaskQueue:
     def mark_done(self, src: str, dst: str):
         # 先追加 done-log（不受主 JSON 损坏影响）
         self._done_log_append(src, dst)
+        self._release_claim(src)
         self._acquire()
         try:
             data = self._load()
-            if src in data["tasks"]:
+            if src in data.get("tasks", {}):
                 data["tasks"][src].update({
                     "status": "done", "dst": dst, "done_at": time.time(),
                 })
@@ -272,6 +381,7 @@ class TaskQueue:
 
     # ── 标记失败（释放回 pending，最多重试 3 次）────────────────────
     def mark_failed(self, src: str, error: str = ""):
+        self._release_claim(src)
         self._acquire()
         try:
             data = self._load()
@@ -308,8 +418,16 @@ class TaskQueue:
         return cnt
 
     def is_all_done(self) -> bool:
-        s = self.stats()
-        return s.get("pending", 0) == 0 and s.get("claimed", 0) == 0
+        """
+        要两次连续的 "pending=0 且 claimed=0" 才认定结束。
+        中间 sleep 2s 让 SMB rename 瞬态不要误伤。
+        """
+        s1 = self.stats()
+        if s1.get("pending", 0) > 0 or s1.get("claimed", 0) > 0:
+            return False
+        time.sleep(2)
+        s2 = self.stats()
+        return s2.get("pending", 0) == 0 and s2.get("claimed", 0) == 0
 
     def pending_count(self) -> int:
         return self.stats().get("pending", 0)
