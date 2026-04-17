@@ -1,1 +1,1 @@
-python distributed_dispatch.py   --input-dir /mnt/movies/Films/Baiduyun   --output-dir /mnt/movies/Films/output   --servers servers.yaml   --git-pull
+python distributed_dispatch.py   --input-dir /mnt/movies/Films/forCloudKor   --output-dir /mnt/movies/Films/forCloudKorOutput   --servers servers.yaml --stage 2

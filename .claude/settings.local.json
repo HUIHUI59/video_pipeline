@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(python:*)",
+      "Bash(python3:*)",
+      "Read(//mnt/movies/Films/baiduyunoutput/.queue/**)",
+      "Bash(find /home/leo4090/video_pipeline -name *.log -o -name *paddle* -o -name *cudnn*)",
+      "Bash(/usr/lib/wsl/lib/nvidia-smi)",
+      "Bash(nvidia-smi)",
+      "Bash(ssh:*)",
+      "Bash(source ~/miniconda3/etc/profile.d/conda.sh)",
+      "Bash(conda activate:*)",
+      "Bash(/dev/null source:*)",
+      "Bash(/dev/null python:*)",
+      "Bash(scp -i ~/.ssh/id_ed25519 -P 2222 /tmp/patch_vsr_empty_list.py leolee@192.168.50.102:/tmp/)",
+      "Bash(scp -i ~/.ssh/id_ed25519 -P 2222 /tmp/patch_vsr_empty_list.py leolee@192.168.50.237:/tmp/)"
+    ]
+  }
+}

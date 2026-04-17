@@ -1,4 +1,4 @@
 python distributed_dispatch.py \
   --servers servers.yaml \
-  --output-dir /mnt/movies/Films/output \
+  --output-dir /mnt/movies/Films/forCloudKorOutput \
   --status
