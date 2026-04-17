@@ -48,11 +48,19 @@ except OSError:
 
 DEFAULT_WORKERS        = 1                 # YOLO 串行在 GPU，单线程即可
 HEARTBEAT_INTERVAL     = 60
-DEFAULT_MODEL          = "yolov8n.pt"       # COCO，class 0=person；首次自动下载
-DEFAULT_FACE_CONF      = 0.35
-DEFAULT_SINGLE_RATIO   = 0.40               # 人体框占帧面积 ≥40% 视为 close-up
-DEFAULT_WIDE_RATIO     = 0.10               # 人体框占帧面积 ≤10% 视为 wide
-DEFAULT_SAMPLE_FRACS   = (0.25, 0.50, 0.75) # 每个 clip 采 3 帧
+DEFAULT_MODEL          = "yolov8l.pt"       # Large：COCO person AP ~52，首次自动下载 ~90MB
+DEFAULT_FACE_MODEL     = "yolov8n-face.pt"  # 社区脸检测模型，首次自动下载 ~6MB
+DEFAULT_PERSON_CONF    = 0.35
+DEFAULT_FACE_CONF      = 0.30
+DEFAULT_SINGLE_RATIO   = 0.15               # 脸框占帧面积 ≥15% 视为 close-up
+DEFAULT_WIDE_RATIO     = 0.03               # 脸框占帧面积 ≤3% 视为 wide
+DEFAULT_SAMPLE_FRACS   = (0.15, 0.30, 0.50, 0.70, 0.85)   # 5 帧，避开首尾过渡
+
+# 画质阈值（灰度 0-255）
+QUALITY_MIN_BRIGHTNESS  = 25.0   # 均值 < 25 → too_dark
+QUALITY_MAX_BRIGHTNESS  = 230.0  # 均值 > 230 → too_bright
+QUALITY_MIN_CONTRAST    = 15.0   # 标准差 < 15 → low_contrast
+QUALITY_MIN_SHARPNESS   = 50.0   # Laplacian 方差 < 50 → blurry
 
 # ══════════════════════════════════════════════════════════════
 # 日志
@@ -90,22 +98,28 @@ class ClassifyResult:
     duration_s: float = 0.0
 
 # ══════════════════════════════════════════════════════════════
-# YOLO 模型（进程内单例，多线程共享）
+# YOLO 模型（按 path 缓存，进程内单例，多线程共享）
 # ══════════════════════════════════════════════════════════════
 
-_yolo_model  = None
+_yolo_cache: dict[str, object] = {}
 _yolo_lock   = threading.Lock()
 _manifest_locks: dict[str, threading.Lock] = {}
 _manifest_lock_guard = threading.Lock()
 
 def get_yolo(model_path: str):
-    global _yolo_model
-    if _yolo_model is None:
-        with _yolo_lock:
-            if _yolo_model is None:
-                from ultralytics import YOLO
-                _yolo_model = YOLO(model_path)
-    return _yolo_model
+    """按 path 缓存 YOLO 模型；加载失败返回 None（调用方做降级）。"""
+    if model_path in _yolo_cache:
+        return _yolo_cache[model_path]
+    with _yolo_lock:
+        if model_path in _yolo_cache:
+            return _yolo_cache[model_path]
+        try:
+            from ultralytics import YOLO
+            _yolo_cache[model_path] = YOLO(model_path)
+        except Exception as e:
+            log.warning(f"加载 YOLO 模型 {model_path} 失败: {e}")
+            _yolo_cache[model_path] = None
+        return _yolo_cache[model_path]
 
 def _manifest_lock(path: str) -> threading.Lock:
     with _manifest_lock_guard:
@@ -115,17 +129,76 @@ def _manifest_lock(path: str) -> threading.Lock:
             _manifest_locks[path] = lk
         return lk
 
+
+def _compute_quality(frame) -> dict:
+    """
+    计算一帧的画质指标：
+      - mean_brightness：亮度均值（0-255）
+      - brightness_std：亮度标准差（对比度代理）
+      - sharpness：Laplacian 方差（清晰度代理，越大越清晰）
+    """
+    import cv2
+    try:
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        mean_b = float(gray.mean())
+        std_b  = float(gray.std())
+        lap    = cv2.Laplacian(gray, cv2.CV_64F)
+        sharp  = float(lap.var())
+        return {"mean_brightness": mean_b,
+                "brightness_std": std_b,
+                "sharpness": sharp}
+    except Exception:
+        return {"mean_brightness": 0.0,
+                "brightness_std": 0.0,
+                "sharpness": 0.0}
+
+
+def _detect_boxes(yolo_model, frame, conf: float, class_filter=None):
+    """
+    返回 (count, ratios) — 每帧检测框个数 + 每个框面积占比列表。
+    模型为 None 时返回 (0, [])。
+    """
+    if yolo_model is None:
+        return 0, []
+    try:
+        if class_filter is not None:
+            det = yolo_model(frame, conf=conf, classes=class_filter, verbose=False)
+        else:
+            det = yolo_model(frame, conf=conf, verbose=False)
+    except Exception:
+        return 0, []
+    if not det:
+        return 0, []
+    boxes = det[0].boxes
+    if boxes is None or len(boxes) == 0:
+        return 0, []
+    import numpy as np
+    xyxy = boxes.xyxy.cpu().numpy()
+    h, w = frame.shape[:2]
+    area = max(w * h, 1)
+    ratios = ((xyxy[:, 2] - xyxy[:, 0]) * (xyxy[:, 3] - xyxy[:, 1]) / area).tolist()
+    return len(boxes), ratios
+
 # ══════════════════════════════════════════════════════════════
 # 单任务：分类一个 clip
 # ══════════════════════════════════════════════════════════════
 
 def classify_one(src: str, manifest_dir: str,
-                 model_path: str      = DEFAULT_MODEL,
-                 face_conf: float     = DEFAULT_FACE_CONF,
-                 single_ratio: float  = DEFAULT_SINGLE_RATIO,
-                 wide_ratio: float    = DEFAULT_WIDE_RATIO,
-                 sample_fracs: tuple  = DEFAULT_SAMPLE_FRACS,
+                 model_path: str        = DEFAULT_MODEL,
+                 face_model_path: str   = DEFAULT_FACE_MODEL,
+                 person_conf: float     = DEFAULT_PERSON_CONF,
+                 face_conf: float       = DEFAULT_FACE_CONF,
+                 single_ratio: float    = DEFAULT_SINGLE_RATIO,
+                 wide_ratio: float      = DEFAULT_WIDE_RATIO,
+                 sample_fracs: tuple    = DEFAULT_SAMPLE_FRACS,
                  queue=None) -> ClassifyResult:
+    """
+    对一个 clip 做：
+      1. 采多帧，每帧跑人体检测 (yolov8l) + 脸检测 (yolov8n-face) + 画质计算
+      2. 取跨帧 max 作为人/脸数量（避免漏人）
+      3. 用脸框而不是人体框做 shot_type 分类（贴合 labelingStandards）
+      4. 画质不合格的 clip 标 quality_ok=False，上传时可过滤
+    """
     res = ClassifyResult(src_path=src)
     t0  = time.time()
 
@@ -137,17 +210,18 @@ def classify_one(src: str, manifest_dir: str,
         return res
 
     try:
-        yolo = get_yolo(model_path)
+        yolo_person = get_yolo(model_path)
     except ImportError:
         res.error = "ultralytics 未安装，请运行: pip install ultralytics"
         if queue: queue.mark_failed(src, res.error)
         return res
-    except Exception as e:
-        res.error = f"YOLO 加载失败: {e}"
+    if yolo_person is None:
+        res.error = f"无法加载 person 模型 {model_path}"
         if queue: queue.mark_failed(src, res.error)
         return res
+    # 脸模型允许加载失败（降级：仅用人体框）
+    yolo_face = get_yolo(face_model_path)
 
-    # 打开视频
     cap = cv2.VideoCapture(src)
     if not cap.isOpened():
         res.error = "无法打开视频"
@@ -159,7 +233,6 @@ def classify_one(src: str, manifest_dir: str,
     width       = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
     height      = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
     duration    = frame_count / fps if fps > 0 else 0.0
-    frame_area  = max(width * height, 1)
 
     if frame_count < 2 or width <= 0 or height <= 0:
         cap.release()
@@ -167,83 +240,99 @@ def classify_one(src: str, manifest_dir: str,
         if queue: queue.mark_failed(src, res.error)
         return res
 
-    # 采样 3 帧，对每帧跑检测
-    frame_results: list[tuple[int, list[float]]] = []
+    # 采样多帧；每帧：person + face + quality
+    per_frame: list[dict] = []  # {"persons":N, "p_ratios":[...],
+                                 #  "faces":N, "f_ratios":[...],
+                                 #  "quality":{mean_brightness,...}}
     for frac in sample_fracs:
         idx = max(0, min(frame_count - 1, int(frame_count * frac)))
         cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
         ok, frame = cap.read()
         if not ok or frame is None:
             continue
-        try:
-            det = yolo(frame, conf=face_conf, classes=[0], verbose=False)
-        except Exception as e:
-            cap.release()
-            res.error = f"YOLO 推理失败: {e}"
-            if queue: queue.mark_failed(src, res.error)
-            return res
-        if not det:
-            frame_results.append((0, []))
-            continue
-        boxes = det[0].boxes
-        if boxes is None or len(boxes) == 0:
-            frame_results.append((0, []))
-            continue
-        xyxy = boxes.xyxy.cpu().numpy()
-        areas  = (xyxy[:, 2] - xyxy[:, 0]) * (xyxy[:, 3] - xyxy[:, 1])
-        ratios = (areas / frame_area).tolist()
-        frame_results.append((len(boxes), ratios))
+        p_n, p_r = _detect_boxes(yolo_person, frame, person_conf, class_filter=[0])
+        f_n, f_r = _detect_boxes(yolo_face,   frame, face_conf,   class_filter=None)
+        per_frame.append({
+            "persons":  p_n, "p_ratios": p_r,
+            "faces":    f_n, "f_ratios": f_r,
+            "quality":  _compute_quality(frame),
+        })
     cap.release()
 
-    if not frame_results:
+    if not per_frame:
         res.error = "未采样到有效帧"
         if queue: queue.mark_failed(src, res.error)
         return res
 
-    # 聚合：中位数去抖
-    counts = [fc for fc, _ in frame_results]
-    num_subjects = int(statistics.median(counts))
-    all_ratios: list[float] = []
-    max_ratios: list[float] = []
-    for _fc, rs in frame_results:
-        if rs:
-            max_ratios.append(max(rs))
-            all_ratios.extend(rs)
-    largest_ratio = max(max_ratios) if max_ratios else 0.0
-    avg_ratio     = (sum(all_ratios) / len(all_ratios)) if all_ratios else 0.0
+    # 聚合计数：取跨帧 max（避免漏人）
+    num_persons = max((fr["persons"] for fr in per_frame), default=0)
+    num_faces   = max((fr["faces"]   for fr in per_frame), default=0)
 
-    # 分类规则
-    if num_subjects == 0:
-        category   = "landscape"
+    # 脸框比例聚合
+    all_f_ratios: list[float] = []
+    max_f_ratios: list[float] = []
+    for fr in per_frame:
+        if fr["f_ratios"]:
+            max_f_ratios.append(max(fr["f_ratios"]))
+            all_f_ratios.extend(fr["f_ratios"])
+    largest_face_ratio = max(max_f_ratios) if max_f_ratios else 0.0
+    avg_face_ratio     = (sum(all_f_ratios) / len(all_f_ratios)) if all_f_ratios else 0.0
+
+    # 人体框比例聚合（作为辅助）
+    all_p_ratios: list[float] = []
+    max_p_ratios: list[float] = []
+    for fr in per_frame:
+        if fr["p_ratios"]:
+            max_p_ratios.append(max(fr["p_ratios"]))
+            all_p_ratios.extend(fr["p_ratios"])
+    largest_subject_ratio = max(max_p_ratios) if max_p_ratios else 0.0
+
+    # 分类（脸优先；无脸模型时降级用人体框）
+    if num_persons == 0:
+        category = "landscape"
         num_people = 0
-    elif num_subjects == 1:
-        num_people = 1
-        if largest_ratio >= single_ratio:
+    elif num_faces == 0:
+        # 有人但看不到脸 → 背对镜头或远景
+        category = "wide"
+        num_people = num_persons
+    elif num_faces == 1:
+        num_people = max(num_persons, 1)
+        if largest_face_ratio >= single_ratio:
             category = "single"
-        elif largest_ratio <= wide_ratio:
+        elif largest_face_ratio <= wide_ratio:
             category = "wide"
         else:
             category = "single"
-    elif 2 <= num_subjects <= 3:
-        num_people = num_subjects
-        category   = "dominant" if (avg_ratio > 0 and largest_ratio > 2.5 * avg_ratio) else "multi"
-    else:
-        num_people = num_subjects
-        category   = "multi"
+    elif num_faces in (2, 3):
+        num_people = max(num_persons, num_faces)
+        category = "dominant" if (avg_face_ratio > 0 and largest_face_ratio > 2.5 * avg_face_ratio) else "multi"
+    else:  # 4+ faces
+        num_people = max(num_persons, num_faces)
+        category = "multi"
 
-    # 置信度（启发式：多帧一致性越高越置信）
-    if len(counts) >= 2:
-        same_count = sum(1 for c in counts if c == num_subjects)
-        confidence = round(same_count / len(counts), 3)
-    else:
-        confidence = 0.5
+    # 画质聚合（跨帧均值）
+    q_means = [fr["quality"]["mean_brightness"] for fr in per_frame]
+    q_stds  = [fr["quality"]["brightness_std"]  for fr in per_frame]
+    q_shrp  = [fr["quality"]["sharpness"]       for fr in per_frame]
+    mean_brightness = sum(q_means) / len(q_means) if q_means else 0.0
+    brightness_std  = sum(q_stds)  / len(q_stds)  if q_stds  else 0.0
+    sharpness       = sum(q_shrp)  / len(q_shrp)  if q_shrp  else 0.0
 
-    # movie_stem = 父目录名；shot_id = "movie/shot_stem"
+    issues: list[str] = []
+    if mean_brightness < QUALITY_MIN_BRIGHTNESS:  issues.append("too_dark")
+    if mean_brightness > QUALITY_MAX_BRIGHTNESS:  issues.append("too_bright")
+    if brightness_std  < QUALITY_MIN_CONTRAST:    issues.append("low_contrast")
+    if sharpness       < QUALITY_MIN_SHARPNESS:   issues.append("blurry")
+    quality_ok = len(issues) == 0
+
+    # 置信度：跨帧人/脸计数一致性
+    same_p = sum(1 for fr in per_frame if fr["persons"] == num_persons)
+    same_f = sum(1 for fr in per_frame if fr["faces"]   == num_faces)
+    confidence = round((same_p + same_f) / (2 * len(per_frame)), 3)
+
     p          = Path(src)
     movie_stem = p.parent.name or "unknown"
     shot_id    = f"{movie_stem}/{p.stem}"
-
-    # 相对路径：保留到 clips/ 开始
     try:
         parts = p.parts
         if "clips" in parts:
@@ -258,17 +347,25 @@ def classify_one(src: str, manifest_dir: str,
         "source_movie":         movie_stem,
         "path":                 path_str,
         "num_people":           num_people,
+        "num_faces":            num_faces,
         "shot_category":        category,
         "duration_sec":         round(duration, 3),
         "width":                width,
         "height":               height,
         "fps":                  round(fps, 3),
-        "largest_subject_ratio": round(largest_ratio, 4),
+        "largest_subject_ratio": round(largest_subject_ratio, 4),
+        "largest_face_ratio":   round(largest_face_ratio, 4),
         "classifier_confidence": confidence,
         "classified_at":        time.time(),
+        "quality_ok":           quality_ok,
+        "quality_metrics": {
+            "mean_brightness": round(mean_brightness, 2),
+            "brightness_std":  round(brightness_std, 2),
+            "sharpness":       round(sharpness, 2),
+            "issues":          issues,
+        },
     }
 
-    # 写 manifest：每部电影一个 JSONL
     manifest_path = str(Path(manifest_dir) / f"{movie_stem}.jsonl")
     Path(manifest_path).parent.mkdir(parents=True, exist_ok=True)
     with _manifest_lock(manifest_path):
@@ -304,8 +401,10 @@ def scan_clips(root: str) -> list[str]:
 # ══════════════════════════════════════════════════════════════
 
 def run_queue(queue, manifest_dir: str, workers: int,
-              model_path: str, face_conf: float,
-              single_ratio: float, wide_ratio: float, stop_ev):
+              model_path: str, face_model_path: str,
+              person_conf: float, face_conf: float,
+              single_ratio: float, wide_ratio: float,
+              sample_fracs: tuple, stop_ev):
     counts  = {"ok": 0, "err": 0, "landscape": 0, "single": 0,
                "dominant": 0, "multi": 0, "wide": 0}
     current = {}
@@ -348,9 +447,10 @@ def run_queue(queue, manifest_dir: str, workers: int,
                 src, _, _idx = item
                 try:
                     fut = pool.submit(classify_one, src, manifest_dir,
-                                      model_path, face_conf,
+                                      model_path, face_model_path,
+                                      person_conf, face_conf,
                                       single_ratio, wide_ratio,
-                                      DEFAULT_SAMPLE_FRACS, queue)
+                                      sample_fracs, queue)
                 except Exception as e:
                     log.error(f"submit 异常 ({e})，释放 claim 后重试")
                     try: queue.mark_failed(src, f"submit error: {e}")
@@ -425,13 +525,19 @@ def main():
     parser.add_argument("output_dir", help="manifest 输出根目录")
     parser.add_argument("--workers",     type=int,   default=DEFAULT_WORKERS)
     parser.add_argument("--model",       type=str,   default=DEFAULT_MODEL,
-                        help=f"YOLO 模型路径（默认 {DEFAULT_MODEL}，首次自动下载）")
+                        help=f"人体检测模型（默认 {DEFAULT_MODEL}，首次自动下载）")
+    parser.add_argument("--face-model",  type=str,   default=DEFAULT_FACE_MODEL,
+                        help=f"人脸检测模型（默认 {DEFAULT_FACE_MODEL}；加载失败会降级为仅人体检测）")
+    parser.add_argument("--person-conf", type=float, default=DEFAULT_PERSON_CONF,
+                        help=f"人体检测置信度（默认 {DEFAULT_PERSON_CONF}）")
     parser.add_argument("--face-conf",   type=float, default=DEFAULT_FACE_CONF,
-                        help=f"YOLO 置信度阈值（默认 {DEFAULT_FACE_CONF}）")
+                        help=f"人脸检测置信度（默认 {DEFAULT_FACE_CONF}）")
     parser.add_argument("--single-face-ratio", type=float, default=DEFAULT_SINGLE_RATIO,
-                        help=f"单人特写阈值：最大人体框占帧面积 ≥ 该值判为 single（默认 {DEFAULT_SINGLE_RATIO}）")
+                        help=f"single 阈值：最大脸框占帧面积 ≥ 该值判 close-up（默认 {DEFAULT_SINGLE_RATIO}）")
     parser.add_argument("--wide-face-ratio",   type=float, default=DEFAULT_WIDE_RATIO,
-                        help=f"远景阈值：最大人体框 ≤ 该值判为 wide（默认 {DEFAULT_WIDE_RATIO}）")
+                        help=f"wide 阈值：最大脸框 ≤ 该值判 wide（默认 {DEFAULT_WIDE_RATIO}）")
+    parser.add_argument("--sample-frames",     type=int,   default=len(DEFAULT_SAMPLE_FRACS),
+                        help=f"每个 clip 采样帧数（默认 {len(DEFAULT_SAMPLE_FRACS)}）")
     parser.add_argument("--log-file",    type=str, default="shot_classify.log")
     parser.add_argument("--pid-file",    type=str, default="")
     parser.add_argument("--queue-dir",   type=str, default="")
@@ -464,6 +570,14 @@ def main():
     manifest_dir = str(Path(args.output_dir) / "manifest")
     Path(manifest_dir).mkdir(parents=True, exist_ok=True)
 
+    # 按 --sample-frames 计算均匀分布的 fracs，避开首尾 15% 避免过渡帧
+    n = max(1, int(args.sample_frames))
+    if n == 1:
+        sample_fracs = (0.5,)
+    else:
+        lo, hi = 0.15, 0.85
+        sample_fracs = tuple(lo + (hi - lo) * i / (n - 1) for i in range(n))
+
     # ══ 队列模式 ══════════════════════════════════════════════
     if args.queue_dir:
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -474,8 +588,9 @@ def main():
         console.rule(f"[bold cyan]🎯  镜头分类队列模式  [{wid}][/bold cyan]")
         console.print(f"  输入     : {args.input_dir}")
         console.print(f"  Manifest : {manifest_dir}")
-        console.print(f"  模型     : {args.model}  conf={args.face_conf}")
-        console.print(f"  阈值     : single≥{args.single_face_ratio}  wide≤{args.wide_face_ratio}")
+        console.print(f"  人体模型 : {args.model}  conf={args.person_conf}")
+        console.print(f"  人脸模型 : {args.face_model}  conf={args.face_conf}")
+        console.print(f"  阈值     : single≥{args.single_face_ratio}  wide≤{args.wide_face_ratio}  frames={n}")
         s = queue.stats()
         console.print(f"  状态     : pending={s.get('pending',0)}  "
                       f"claimed={s.get('claimed',0)}  done={s.get('done',0)}")
@@ -483,8 +598,10 @@ def main():
             console.print("[green]队列无待处理任务，退出。[/green]")
         else:
             c = run_queue(queue, manifest_dir, args.workers,
-                          args.model, args.face_conf,
-                          args.single_face_ratio, args.wide_face_ratio, stop_ev)
+                          args.model, args.face_model,
+                          args.person_conf, args.face_conf,
+                          args.single_face_ratio, args.wide_face_ratio,
+                          sample_fracs, stop_ev)
             console.rule("[bold]分类完成[/bold]")
             console.print(
                 f"  ✅ ok={c['ok']}  ❌ err={c['err']}  |  "
@@ -502,8 +619,10 @@ def main():
         results = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as pool:
             futs = {pool.submit(classify_one, src, manifest_dir,
-                                args.model, args.face_conf,
-                                args.single_face_ratio, args.wide_face_ratio): src
+                                args.model, args.face_model,
+                                args.person_conf, args.face_conf,
+                                args.single_face_ratio, args.wide_face_ratio,
+                                sample_fracs): src
                     for src in clips}
             for fut in concurrent.futures.as_completed(futs):
                 if stop_ev.is_set():

@@ -290,6 +290,13 @@ class ShotLabel(_Base):
 # Stage 4 manifest entry（upload.py 用它校验 manifest 每一行）
 # ══════════════════════════════════════════════════════════════
 
+class ManifestQuality(_Base):
+    mean_brightness: float
+    brightness_std:  float
+    sharpness:       float
+    issues:          list[str] = Field(default_factory=list)
+
+
 class ManifestEntry(_Base):
     shot_id:               str
     source_movie:          str
@@ -303,6 +310,11 @@ class ManifestEntry(_Base):
     largest_subject_ratio: float = Field(ge=0.0, le=1.0)
     classifier_confidence: float = Field(ge=0.0, le=1.0)
     classified_at:         float
+    # ── v2 新增字段（旧 manifest 兼容：Optional, 默认 None）─────────
+    num_faces:             Optional[int]              = None
+    largest_face_ratio:    Optional[float]            = None
+    quality_ok:            Optional[bool]             = None
+    quality_metrics:       Optional[ManifestQuality]  = None
 
 
 # ══════════════════════════════════════════════════════════════

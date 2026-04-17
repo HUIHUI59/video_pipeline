@@ -111,6 +111,8 @@ def main() -> int:
     ap.add_argument("--movies",        default="",    help="覆盖 filters.movies（逗号分隔）")
     ap.add_argument("--max-shots",     type=int, default=None, help="覆盖 filters.max_shots")
     ap.add_argument("--dry-run",       action="store_true", help="只打印 rsync 命令，不执行")
+    ap.add_argument("--include-bad-quality", action="store_true",
+                    help="即使 quality_ok=False 也上传（默认过滤掉太黑/太亮/模糊的镜头）")
     args = ap.parse_args()
 
     cfg = _load_config(args.config)
@@ -136,9 +138,11 @@ def main() -> int:
     raw = list(_iter_manifest_lines(manifest_dir,
                                     set(movies) if movies else None))
     print(f"  校验通过: {len(raw)} 条")
-    filtered = _filter_entries(raw, categories, max_shots)
+    filtered = _filter_entries(raw, categories, max_shots,
+                               skip_bad_quality=not args.include_bad_quality)
     print(f"  筛选后:   {len(filtered)} 条  "
-          f"(categories={categories or 'all'}, movies={movies or 'all'}, max={max_shots or '∞'})")
+          f"(categories={categories or 'all'}, movies={movies or 'all'}, "
+          f"max={max_shots or '∞'}, skip_bad_quality={not args.include_bad_quality})")
 
     if not filtered:
         print("[WARN] 没有符合条件的 shot，退出。")
