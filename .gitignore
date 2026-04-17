@@ -1,5 +1,6 @@
-# 本地配置（含真实 IP / 用户名）
-servers.yaml
+# 本地配置（含真实 IP / 用户名 / 云端凭据）
+configs/servers.yaml
+configs/runpod.yaml
 
 # 运行时产生的文件
 __pycache__/

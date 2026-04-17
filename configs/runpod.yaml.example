@@ -1,0 +1,35 @@
+# ═══════════════════════════════════════════════════════════════
+# Runpod Stage 5 标注配置（模板）
+# 拷贝到 configs/runpod.yaml 后填入真实 Pod 信息
+# 真实 runpod.yaml 已在 .gitignore 里，不会误提交
+# ═══════════════════════════════════════════════════════════════
+
+pod:
+  host: 100.64.1.23          # Runpod Pod 公网 IP
+  port: 22100                # Pod SSH 端口（Runpod 网页 connect 面板里能拿到）
+  user: root                 # Runpod Pod 默认用户
+  ssh_key: ~/.ssh/id_ed25519 # 你添加到 Runpod 账号的 SSH 私钥
+
+paths:
+  local_clips_root:   /mnt/movies/Films/output/clips       # Stage 2 的输出
+  local_labels_root:  /mnt/movies/Films/output/labels      # 标注 JSON 本地落地位置
+  local_manifest_dir: /mnt/movies/Films/output/manifest    # Stage 4 输出的 manifest JSONL 目录
+  pod_workspace:      /workspace/labeling                  # Pod 内工作目录（~200GB 磁盘）
+
+model:
+  name: Qwen/Qwen3-VL-32B-Instruct
+  precision: bf16            # bf16 (~66.7 GB，H100 80G OK) | fp8 (~35 GB)
+
+filters:
+  shot_categories: [single, dominant]   # 先只跑人物特写；改成 [] 则不过滤
+  movies: []                            # [] = 所有电影；或列出 ["MovieA","MovieB"]
+  max_shots: null                       # 调试时填数字限制前 N 条，null = 全部
+
+sampling:
+  temperature:           0.2
+  top_p:                 0.9
+  max_tokens:            2048
+  repetition_penalty:    1.05
+  frames_single_dominant: 8   # single / dominant 采 8 帧
+  frames_multi_wide:      4   # multi / wide / landscape 采 4 帧
+  resize_shortest:        448 # Qwen3-VL 推荐短边

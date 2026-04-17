@@ -1,1 +1,0 @@
-python distributed_dispatch.py --servers servers.yaml --stop --target RTX4090_local

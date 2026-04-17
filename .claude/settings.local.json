@@ -16,7 +16,14 @@
       "Bash(/dev/null source:*)",
       "Bash(/dev/null python:*)",
       "Bash(scp -i ~/.ssh/id_ed25519 -P 2222 /tmp/patch_vsr_empty_list.py leolee@192.168.50.102:/tmp/)",
-      "Bash(scp -i ~/.ssh/id_ed25519 -P 2222 /tmp/patch_vsr_empty_list.py leolee@192.168.50.237:/tmp/)"
+      "Bash(scp -i ~/.ssh/id_ed25519 -P 2222 /tmp/patch_vsr_empty_list.py leolee@192.168.50.237:/tmp/)",
+      "Bash(git mv *)",
+      "Bash(chmod +x /home/leo4090/video_pipeline/scripts/*.sh)",
+      "Bash(conda env *)",
+      "Bash(/home/leo4090/miniconda3/envs/movietest/bin/python distributed_dispatch.py --help)",
+      "Bash(/home/leo4090/miniconda3/envs/movietest/bin/python *)",
+      "Bash(find . -type f -exec ls -lh {} \\\\;)",
+      "Bash(awk '{print $9, \"\\(\" $5 \"\\)\"}')"
     ]
   }
 }

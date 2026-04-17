@@ -1,0 +1,290 @@
+{
+  "shot_id": "example_dominant_action_004",
+  "source_movie": "John_Wick_2014",
+
+  "shot_context": {
+    "shot_type": "medium",
+    "shot_emotion_summary": "Cold determination from the primary figure; frozen alarm from the background figure.",
+    "shot_motion_summary": "Primary figure advances with controlled strides, right arm extended holding an object. Background figure stumbles backward.",
+    "scene_context": {
+      "visible_setting": "Industrial warehouse interior, concrete floor, overhead fluorescent lighting, blue-grey tones",
+      "narrative_situation": "A confrontation where one party has decisive advantage",
+      "narrative_confidence": 0.6
+    }
+  },
+
+  "persons": [
+    {
+      "person_index": 0,
+      "spatial_position": "center",
+
+      "face_analysis": {
+        "face_clearly_visible": true,
+        "face_size_ratio": 0.10,
+
+        "primary_emotion": "neutral",
+        "secondary_emotion": null,
+        "valence": -0.1,
+        "arousal": 0.3,
+        "intensity": 0.2,
+
+        "expression_caption": "His face is almost entirely flat — a professional blank. The eyes are steady and focused, tracking something ahead. No tension in the brow, no movement in the mouth. The only readable signal is the slight compression of the lips, as though speech has been consciously suppressed. This stillness is itself expressive: the absence of emotion in a high-stress context reads as extreme control.",
+
+        "alternative_captions": {
+          "direct": "His face is blank. Eyes steady, mouth closed, lips slightly compressed. No brow movement.",
+          "literary": "His face offers nothing — it is a closed ledger, every entry redacted. Only the faintest thinning of his lips suggests that behind the stillness, calculations are being completed.",
+          "direction": "Dead neutral. No micro-movements. Eyes track forward with predatory focus. Lips compressed 1mm — the only tell. Do not blink. Do not emote. The power is in the void.",
+          "situational": "With the practiced emptiness of someone for whom this situation is routine and emotion is a luxury he abandoned long ago."
+        },
+
+        "facial_components": {
+          "eyes": "Level, focused, tracking forward, no tension, no widening",
+          "eyebrows": "Flat, neutral position, no movement",
+          "mouth": "Closed, lips compressed slightly thinner than resting",
+          "jaw": "Relaxed, no clench",
+          "gaze_direction": "camera",
+          "head_pose": "frontal"
+        },
+
+        "facial_attributes": {
+          "apparent_gender": "male",
+          "apparent_age_range": "adult",
+          "glasses": false,
+          "facial_hair": "stubble",
+          "head_covering": "none",
+          "mask": false,
+          "makeup_visible": false,
+          "distinctive_notes": "Short dark hair. Dark suit partially visible. Bruise on left cheekbone."
+        },
+
+        "temporal_change": "static",
+        "micro_expression": false,
+
+        "observable_blendshape_hints": {
+          "brow_raise_inner": "none",
+          "brow_raise_outer": "none",
+          "brow_furrow": "none",
+          "eye_widen": "none",
+          "eye_squint": "none",
+          "eye_blink_state": "open",
+          "cheek_raise": "none",
+          "nose_wrinkle": "none",
+          "upper_lip_raise": "none",
+          "lip_corner_pull": "none",
+          "lip_corner_depress": "none",
+          "lip_tighten": "slight",
+          "lip_part": "none",
+          "jaw_clench": "none",
+          "jaw_drop": "none"
+        },
+
+        "expression_confidence": 0.87
+      },
+
+      "body_analysis": {
+        "body_clearly_visible": true,
+
+        "shot_frame_of_body": "half_body",
+        "visible_body_parts": ["head", "neck", "shoulders", "upper_arms", "forearms", "hands", "torso", "hips"],
+
+        "motion_caption": "He advances through the frame with controlled, measured strides. His torso is upright and squared, shoulders level with no unnecessary sway. His right arm is extended forward at hip height, hand gripping an object, forearm locked in a stable aim position. His left arm hangs relaxed at his side, fingers loosely curled. The locomotion is purposeful — each step lands flat and deliberate, weight evenly distributed. No wasted motion. The upper body remains remarkably stable despite the walking, indicating trained movement.",
+
+        "alternative_captions": {
+          "direct": "He walks forward with measured steps. Right arm extended forward at hip height. Left arm hangs at his side. Torso upright, shoulders level.",
+          "literary": "He moves through the space the way water moves through a channel — without turbulence, without hesitation, the arm extended ahead of him like the prow of something inevitable.",
+          "direction": "Controlled advance. Two steps in frame. Right arm locked forward, stable. Left arm dead-hang, loose fingers. Zero upper-body sway. Flat foot placement. This is trained locomotion — mechanical precision, not natural walking.",
+          "situational": "With the economy of movement of someone who has calculated exactly how many steps remain and is spending none of them on doubt."
+        },
+
+        "action_primary": "walking",
+        "action_quality": {
+          "intensity": "mid",
+          "tone": "controlled",
+          "tempo": "sustained"
+        },
+        "body_focus": "upper_body",
+
+        "kinematics_hint": {
+          "periodicity": "periodic",
+          "symmetry": "bilateral_asymmetric",
+          "duration_class": "ongoing",
+          "trajectory": "linear"
+        },
+
+        "upper_body_detail": {
+          "head": "Fixed forward, no tilt, no turn — locked on target",
+          "neck": "Stable, no visible tension or strain",
+          "shoulders": "Level, square, no sway during steps — trained stability",
+          "arms": "Right: extended forward at hip height, forearm locked, hand gripping object. Left: hanging relaxed, fingers loosely curled.",
+          "hands": "Right: closed grip on object at hip-level extension. Left: loosely curled, natural hanging position.",
+          "torso": "Upright, squared, remarkably stable — minimal oscillation during walking",
+          "posture": "walking"
+        },
+
+        "gesture_detail": "Right arm extended forward at hip height with locked forearm — a functional aim/point position, not a communicative gesture. Left hand in passive dead-hang with loosely curled fingers. No communicative gestures.",
+        "hands_visible": true,
+
+        "interaction": {
+          "count": "dyadic",
+          "contact": "none",
+          "relation": "opposing",
+          "interacts_with_person_index": [1]
+        },
+
+        "motion_confidence": 0.92
+      }
+    },
+
+    {
+      "person_index": 1,
+      "spatial_position": "background",
+
+      "face_analysis": {
+        "face_clearly_visible": true,
+        "face_size_ratio": 0.04,
+
+        "primary_emotion": "fear",
+        "secondary_emotion": null,
+        "valence": -0.8,
+        "arousal": 0.9,
+        "intensity": 0.8,
+
+        "expression_caption": "Face contorted in open fear. Eyes wide, brows raised high, mouth open. Expression is consistent across all frames — frozen in alarm. At this scale (4% of frame) fine detail is limited, but the overall configuration of fear is unambiguous.",
+
+        "alternative_captions": {
+          "direct": "Eyes wide, brows high, mouth open. Frozen in fear.",
+          "literary": "A face unmade by terror, all its composure scattered.",
+          "direction": "Full fear display at distance. Wide eyes, raised brows, gaping mouth. Hold without variation.",
+          "situational": "A man confronting the certainty that the situation has passed beyond his ability to influence."
+        },
+
+        "facial_components": {
+          "eyes": "Wide open, whites visible",
+          "eyebrows": "Raised high",
+          "mouth": "Open, lips pulled back",
+          "jaw": "Dropped",
+          "gaze_direction": "camera",
+          "head_pose": "frontal"
+        },
+
+        "facial_attributes": {
+          "apparent_gender": "male",
+          "apparent_age_range": "adult",
+          "glasses": false,
+          "facial_hair": "none",
+          "head_covering": "none",
+          "mask": false,
+          "makeup_visible": false,
+          "distinctive_notes": "Face at small scale — limited fine detail observable."
+        },
+
+        "temporal_change": "static",
+        "micro_expression": false,
+
+        "observable_blendshape_hints": {
+          "brow_raise_inner": "strong",
+          "brow_raise_outer": "strong",
+          "brow_furrow": "none",
+          "eye_widen": "strong",
+          "eye_squint": "none",
+          "eye_blink_state": "open",
+          "cheek_raise": "none",
+          "nose_wrinkle": "unknown",
+          "upper_lip_raise": "unknown",
+          "lip_corner_pull": "unknown",
+          "lip_corner_depress": "unknown",
+          "lip_tighten": "none",
+          "lip_part": "strong",
+          "jaw_clench": "none",
+          "jaw_drop": "strong"
+        },
+
+        "expression_confidence": 0.65
+      },
+
+      "body_analysis": {
+        "body_clearly_visible": true,
+
+        "shot_frame_of_body": "three_quarter",
+        "visible_body_parts": ["head", "neck", "shoulders", "upper_arms", "forearms", "hands", "torso", "hips", "thighs"],
+
+        "motion_caption": "The background figure is stumbling backward — weight shifting to his rear foot with his torso tilting away from the advancing person. Both arms are raised to shoulder height, palms outward in a defensive surrender gesture. His shoulders are hunched upward around his neck. The movement is uncoordinated — his left foot steps back unevenly, suggesting loss of balance rather than controlled retreat.",
+
+        "alternative_captions": {
+          "direct": "He stumbles backward with both arms raised, palms out. Shoulders hunched. Left foot steps unevenly.",
+          "literary": "He comes apart in reverse — feet tangling beneath a body that is already surrendering, arms thrown up in the universal semaphore of defeat.",
+          "direction": "Backwards stumble, off-balance. Arms up at shoulder height, palms open to camera. Hunch shoulders high. Left foot catches — uncoordinated, not a clean step. This is panic retreat, not tactical withdrawal.",
+          "situational": "The body language of a man whose last negotiating position has just evaporated."
+        },
+
+        "action_primary": "stumbling",
+        "action_quality": {
+          "intensity": "high",
+          "tone": "tense",
+          "tempo": "punctuated"
+        },
+        "body_focus": "upper_body",
+
+        "kinematics_hint": {
+          "periodicity": "non_periodic",
+          "symmetry": "bilateral_symmetric",
+          "duration_class": "ongoing",
+          "trajectory": "linear"
+        },
+
+        "upper_body_detail": {
+          "head": "Tilted backward, chin raised, pulled away from the threat",
+          "neck": "Compressed, buried between hunched shoulders",
+          "shoulders": "Hunched upward around neck — defensive contraction",
+          "arms": "Both raised to shoulder height, elbows slightly bent, palms facing outward",
+          "hands": "Both open, palms forward, fingers spread — surrender/defensive posture",
+          "torso": "Leaning backward, weight shifting to rear foot",
+          "posture": "leaning_back"
+        },
+
+        "gesture_detail": "Both arms raised symmetrically to shoulder height with palms facing outward and fingers spread — a surrender/stop gesture. This is a reflexive defensive posture rather than a deliberate communicative gesture.",
+        "hands_visible": true,
+
+        "interaction": {
+          "count": "dyadic",
+          "contact": "none",
+          "relation": "opposing",
+          "interacts_with_person_index": [0]
+        },
+
+        "motion_confidence": 0.82
+      }
+    }
+  ],
+
+  "interaction": {
+    "count": "dyadic",
+    "contact": "none",
+    "relation": "opposing"
+  },
+
+  "quality_flags": {
+    "face_clearly_visible": true,
+    "body_clearly_visible": true,
+    "motion_blur": false,
+    "occlusion": "none",
+    "lighting": "good",
+    "camera_stable": true,
+    "frame_sampling_ok": true,
+    "vlm_confidence": 0.88
+  },
+
+  "usability_score": {
+    "face": 0.78,
+    "motion": 0.89
+  },
+
+  "exclusion_reason": null,
+
+  "meta": {
+    "vlm_model": "Qwen3-VL-32B-Instruct",
+    "vlm_version": "2026-04",
+    "frames_used": 8,
+    "infer_time_ms": 3100
+  }
+}

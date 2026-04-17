@@ -1,3 +1,8 @@
 rich
 pyyaml
 scenedetect[opencv]
+# Stage 4 镜头分类
+ultralytics>=8.1
+opencv-python-headless
+# Stage 5 本地侧 schema 校验（pod_runner 里也要，但那个由 tools/pod_setup.sh 装）
+pydantic>=2

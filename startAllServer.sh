@@ -1,1 +1,0 @@
-python distributed_dispatch.py   --input-dir /mnt/movies/Films/forCloudKor   --output-dir /mnt/movies/Films/forCloudKorOutput   --servers servers.yaml --stage 2

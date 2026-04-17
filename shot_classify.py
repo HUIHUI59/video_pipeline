@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Shim → src/dispatcher/distributed_dispatch.py"""
+"""Shim → src/workers/shot_classify.py"""
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
-from dispatcher.distributed_dispatch import main  # noqa: E402
+from workers.shot_classify import main  # noqa: E402
 
 if __name__ == "__main__":
     main()

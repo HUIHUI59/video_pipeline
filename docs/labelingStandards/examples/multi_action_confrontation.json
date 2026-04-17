@@ -1,0 +1,405 @@
+{
+  "shot_id": "example_multi_action_009",
+  "source_movie": "The_Raid_2011",
+
+  "shot_context": {
+    "shot_type": "medium",
+    "shot_emotion_summary": "A three-way confrontation at the edge of violence: concentrated aggression from the attacker, cold readiness from the defender, and rising panic from the trapped bystander.",
+    "shot_motion_summary": "Person 0 drives forward with a right-arm strike. Person 1 shifts weight into a blocking stance. Person 2 scrambles backward along the wall.",
+    "scene_context": {
+      "visible_setting": "Narrow concrete corridor, exposed pipes along ceiling, flickering overhead light casting harsh shadows, debris on floor",
+      "narrative_situation": "A violent encounter in a confined space with uneven odds",
+      "narrative_confidence": 0.55
+    }
+  },
+
+  "persons": [
+    {
+      "person_index": 0,
+      "spatial_position": "left",
+
+      "face_analysis": {
+        "face_clearly_visible": true,
+        "face_size_ratio": 0.08,
+        "primary_emotion": "anger",
+        "secondary_emotion": null,
+        "valence": -0.8,
+        "arousal": 0.95,
+        "intensity": 0.9,
+
+        "expression_caption": "His face is locked into focused rage. The brows are driven sharply downward and compressed together, creating a deep V-shaped furrow. His eyes are narrowed but intensely focused — not squinting from light but from muscular contraction of the orbicularis, channeling all visual attention to the target. His upper lip is raised, exposing the upper teeth in an involuntary aggression display. The jaw is clenched and thrust slightly forward, the masseter visibly defined. Across the shot duration, the expression does not change — it is sustained at maximum intensity, a face that has committed completely to the action. Slight motion blur is present in the earliest frame due to the forward momentum of the strike, but the expression is readable throughout.",
+
+        "alternative_captions": {
+          "direct": "Brows driven down into a deep V-furrow. Eyes narrowed with intense focus. Upper lip raised, teeth exposed. Jaw clenched and thrust forward. Expression held at peak intensity throughout.",
+          "literary": "His face has become a weapon — every muscle recruited into an architecture of violence, the brows slamming down like shutters, the lip curling back to reveal something ancestral and predatory, the jaw set like a thing that has forgotten how to unclench.",
+          "direction": "Maximum aggression hold. Brows down hard — deep V-furrow. Eyes narrow, NOT squint — this is focus, not discomfort. Upper lip raise: teeth visible. Jaw forward, masseter engaged. HOLD this through the entire strike. No variation. No softening. The face is a mask of committed force.",
+          "situational": "With the concentrated ferocity of someone who has stopped calculating and started operating on pure kinetic intent."
+        },
+
+        "facial_components": {
+          "eyes": "Narrowed from orbicularis contraction, intensely focused, tracking target",
+          "eyebrows": "Sharply depressed and compressed, deep V-shaped furrow between brows",
+          "mouth": "Upper lip raised exposing upper teeth, lower lip taut, aggressive display",
+          "jaw": "Clenched, thrust slightly forward, masseter prominently defined",
+          "gaze_direction": "right",
+          "head_pose": "frontal"
+        },
+
+        "facial_attributes": {
+          "apparent_gender": "male",
+          "apparent_age_range": "young_adult",
+          "glasses": false,
+          "facial_hair": "none",
+          "head_covering": "none",
+          "mask": false,
+          "makeup_visible": false,
+          "distinctive_notes": "Sweat visible on forehead and temples. A cut above the left eyebrow with dried blood."
+        },
+
+        "temporal_change": "static",
+        "micro_expression": false,
+
+        "observable_blendshape_hints": {
+          "brow_raise_inner": "none",
+          "brow_raise_outer": "none",
+          "brow_furrow": "strong",
+          "eye_widen": "none",
+          "eye_squint": "medium",
+          "eye_blink_state": "open",
+          "cheek_raise": "medium",
+          "nose_wrinkle": "strong",
+          "upper_lip_raise": "strong",
+          "lip_corner_pull": "none",
+          "lip_corner_depress": "slight",
+          "lip_tighten": "strong",
+          "lip_part": "medium",
+          "jaw_clench": "strong",
+          "jaw_drop": "none"
+        },
+
+        "expression_confidence": 0.86
+      },
+
+      "body_analysis": {
+        "body_clearly_visible": true,
+        "shot_frame_of_body": "three_quarter",
+        "visible_body_parts": ["head", "neck", "shoulders", "upper_arms", "forearms", "hands", "torso", "hips", "thighs"],
+
+        "motion_caption": "He drives forward explosively with his entire body behind a right-arm strike. His right arm extends forward from a cocked position at the shoulder — the elbow straightening as the fist travels toward the target at center-frame. His left arm is pulled back to his ribs in a guard position, elbow tight against the body, hand clenched. His torso rotates counterclockwise as the right arm extends, the right shoulder driving forward while the left pulls back — a full hip-through-shoulder kinetic chain. His weight transfers aggressively onto his front left foot, which is planted forward, while his right foot pushes off the ground behind him. The overall motion is a single committed forward drive — no hesitation, no feint, maximum force channeled through the right arm.",
+
+        "alternative_captions": {
+          "direct": "He drives forward with a right-arm strike. Right arm extends from shoulder. Left arm guards at ribs. Torso rotates counterclockwise. Weight on front left foot, right foot pushing off behind.",
+          "literary": "His body becomes a vector — every joint aligned to deliver force forward, the torso corkscrewing, the arm uncoiling, the weight pouring from back foot to front like water through a breach, all of it aimed at a single point in space.",
+          "direction": "Explosive forward drive. Right arm: cocked at shoulder, extending — show the kinetic chain from hip rotation through shoulder through elbow extension. Left arm: guard position, elbow to ribs, fist clenched. Torso rotates CCW — right shoulder leads. Weight transfer: back right foot to planted front left foot. Commit fully — no pulled punches, no half-measures.",
+          "situational": "With the total physical commitment of someone for whom restraint stopped being an option two seconds ago."
+        },
+
+        "action_primary": "striking",
+        "action_quality": {
+          "intensity": "high",
+          "tone": "forceful",
+          "tempo": "explosive"
+        },
+        "body_focus": "upper_body",
+
+        "kinematics_hint": {
+          "periodicity": "non_periodic",
+          "symmetry": "bilateral_asymmetric",
+          "duration_class": "momentary",
+          "trajectory": "linear"
+        },
+
+        "upper_body_detail": {
+          "head": "Driving forward, chin slightly tucked, aligned with the strike direction",
+          "neck": "Tensed, cords visible, supporting the forward head drive",
+          "shoulders": "Right shoulder driving forward, left pulling back — rotational asymmetry from torso rotation",
+          "arms": "Right: extending forward from cocked position, elbow straightening, full strike extension. Left: pulled tight to ribs in guard, elbow locked against body, forearm horizontal.",
+          "hands": "Right: clenched fist, knuckles aligned, traveling toward target. Left: clenched fist held at rib height in guard position.",
+          "torso": "Rotating counterclockwise, right side leading, core engaged, visible tension through obliques",
+          "posture": "leaning_forward"
+        },
+
+        "gesture_detail": "Right arm performs a full forward strike — starting from a cocked position at the right shoulder, the arm extends through elbow straightening with the fist traveling forward at chest height. The strike is powered by a counterclockwise torso rotation that drives the right shoulder forward. Left arm maintains a guard position tight against the left ribs, fist clenched, elbow locked to the body. Both hands are clenched fists throughout — right knuckles aligned for impact, left held in reserve.",
+        "hands_visible": true,
+
+        "interaction": {
+          "count": "triadic",
+          "contact": "incidental",
+          "relation": "opposing",
+          "interacts_with_person_index": [1]
+        },
+
+        "motion_confidence": 0.88
+      }
+    },
+
+    {
+      "person_index": 1,
+      "spatial_position": "center",
+
+      "face_analysis": {
+        "face_clearly_visible": true,
+        "face_size_ratio": 0.07,
+        "primary_emotion": "neutral",
+        "secondary_emotion": null,
+        "valence": -0.1,
+        "arousal": 0.6,
+        "intensity": 0.3,
+
+        "expression_caption": "His face is controlled and focused despite the incoming strike. The brows are level, pulled neither up nor down — a deliberately maintained neutral under pressure. His eyes are wide-set and locked on the attacker's center mass, tracking the strike trajectory rather than the face. His mouth is closed, lips pressed in a firm line, no tension in the cheeks. The jaw is set but not clenched — stable rather than rigid. There is a readiness in the overall expression that reads as trained calm: the absence of fear or anger is itself informative, suggesting experience with this type of situation. A single rapid blink occurs at the moment of impact anticipation, then the eyes lock open again.",
+
+        "alternative_captions": {
+          "direct": "Brows level, neutral. Eyes locked on attacker's center mass. Mouth closed, lips firm. Jaw set, not clenched. One rapid blink at impact anticipation, then eyes lock open.",
+          "literary": "His face has the studied blankness of someone who learned long ago that fear is a luxury the body cannot afford in moments like this — every muscle held in reserve, the expression as economical as the defense it precedes.",
+          "direction": "Trained neutral under attack. Brows flat — resist the flinch impulse. Eyes track the strike vector, NOT the attacker's face — this is tactical awareness. Mouth firm, closed. Jaw set lightly. ONE rapid blink at the anticipation beat, then lock open. No fear display. The audience should feel the calm is more dangerous than the attack.",
+          "situational": "With the unnerving composure of someone who has been hit before and knows exactly how much it costs, and has decided the price is acceptable."
+        },
+
+        "facial_components": {
+          "eyes": "Wide-set, locked on attacker's center mass, tracking strike, one rapid blink then locked open",
+          "eyebrows": "Level, deliberately maintained neutral, no raise or furrow",
+          "mouth": "Closed, lips pressed in firm line, no tension visible in cheeks",
+          "jaw": "Set but not clenched — stable, not rigid",
+          "gaze_direction": "left",
+          "head_pose": "3q_left"
+        },
+
+        "facial_attributes": {
+          "apparent_gender": "male",
+          "apparent_age_range": "young_adult",
+          "glasses": false,
+          "facial_hair": "none",
+          "head_covering": "none",
+          "mask": false,
+          "makeup_visible": false,
+          "distinctive_notes": "Sweat sheen across forehead. Bruise forming on right cheekbone. Hair matted."
+        },
+
+        "temporal_change": "static",
+        "micro_expression": false,
+
+        "observable_blendshape_hints": {
+          "brow_raise_inner": "none",
+          "brow_raise_outer": "none",
+          "brow_furrow": "slight",
+          "eye_widen": "slight",
+          "eye_squint": "none",
+          "eye_blink_state": "rapid_blink",
+          "cheek_raise": "none",
+          "nose_wrinkle": "none",
+          "upper_lip_raise": "none",
+          "lip_corner_pull": "none",
+          "lip_corner_depress": "none",
+          "lip_tighten": "medium",
+          "lip_part": "none",
+          "jaw_clench": "slight",
+          "jaw_drop": "none"
+        },
+
+        "expression_confidence": 0.82
+      },
+
+      "body_analysis": {
+        "body_clearly_visible": true,
+        "shot_frame_of_body": "three_quarter",
+        "visible_body_parts": ["head", "neck", "shoulders", "upper_arms", "forearms", "hands", "torso", "hips", "thighs"],
+
+        "motion_caption": "He shifts his weight rapidly to the left, dropping his center of gravity as he transitions into a blocking stance. His left forearm rises to intercept the incoming strike — rotating outward from a low guard position, the ulnar edge of the forearm presented as a deflection surface. His right hand drops to waist height, open-palmed, positioned to grab or redirect. His torso compresses downward and twists clockwise, the left shoulder rising to protect the jaw while the right hip pulls back to generate rotational energy for a potential counter. His left foot slides outward to widen his base, while his right foot pivots on the ball, angling his body at roughly 45 degrees to the attacker. The motion is economical — no wasted movement, no exaggerated wind-up.",
+
+        "alternative_captions": {
+          "direct": "He drops his weight left and raises his left forearm to block. Right hand drops open to waist. Torso compresses and twists clockwise. Left foot slides out, right foot pivots, angling 45 degrees.",
+          "literary": "His body reorganizes itself like a door swinging to meet a force — the forearm rising to become a wall, the hips twisting to generate the torque for what comes next, the whole frame dropping lower as though gravity were an ally he has learned to recruit.",
+          "direction": "Defensive transition: drop weight left, lower center of gravity 10cm. Left forearm: rise from low guard, rotate out, present ulnar edge — this is a DEFLECTION, not a catch. Right hand: drop to waist, open palm, ready position. Torso: compress down, twist CW — left shoulder up to protect chin, right hip back. Feet: left slides out, right pivots on ball. End position: 45 degrees to attacker. All motion is REACTIVE and ECONOMICAL — trained response, not panic.",
+          "situational": "With the mechanical precision of someone whose body has rehearsed this response so many times it no longer requires conscious thought."
+        },
+
+        "action_primary": "blocking",
+        "action_quality": {
+          "intensity": "high",
+          "tone": "controlled",
+          "tempo": "explosive"
+        },
+        "body_focus": "upper_body",
+
+        "kinematics_hint": {
+          "periodicity": "non_periodic",
+          "symmetry": "bilateral_asymmetric",
+          "duration_class": "momentary",
+          "trajectory": "curved"
+        },
+
+        "upper_body_detail": {
+          "head": "Dropping with the weight shift, tucking behind the rising left shoulder",
+          "neck": "Compressed, chin tucking toward left shoulder for protection",
+          "shoulders": "Left rising to protect jaw line, right pulling back with torso rotation",
+          "arms": "Left: forearm rising from low guard, rotating outward for deflection. Right: dropping to waist height, open-palmed, positioning for grab or redirect.",
+          "hands": "Left: fist closed, forearm presented as blocking surface. Right: open palm at waist, fingers slightly spread, ready to grip.",
+          "torso": "Compressing downward, rotating clockwise, core engaged, left side leading",
+          "posture": "crouching"
+        },
+
+        "gesture_detail": "Left forearm rises from a low guard position and rotates outward, presenting the ulnar edge as a deflection surface against the incoming right-arm strike — a trained parry rather than a catch or grab. Right hand drops to waist height with an open palm and slightly spread fingers, positioned to grab the attacker's arm or redirect momentum after the block. The movement is a coordinated defensive package: block with the left, prepare counter-options with the right.",
+        "hands_visible": true,
+
+        "interaction": {
+          "count": "triadic",
+          "contact": "incidental",
+          "relation": "opposing",
+          "interacts_with_person_index": [0]
+        },
+
+        "motion_confidence": 0.85
+      }
+    },
+
+    {
+      "person_index": 2,
+      "spatial_position": "right",
+
+      "face_analysis": {
+        "face_clearly_visible": true,
+        "face_size_ratio": 0.06,
+        "primary_emotion": "fear",
+        "secondary_emotion": "surprise",
+        "valence": -0.85,
+        "arousal": 0.9,
+        "intensity": 0.85,
+
+        "expression_caption": "His face is open in undisguised terror. Both brows are raised high, stretching the forehead skin into visible horizontal creases. His eyes are maximally wide — the sclera visible above and below the iris, giving a rimmed-white appearance. His mouth is open in a gaping oval, the lower jaw dropped, lips pulled back laterally. The expression is frozen and held across the shot duration without modulation — there is no building, no releasing, just sustained maximal fear. At this scale (6% of frame), fine muscular detail is limited, but the overall gestalt of terror is unmistakable. Sweat is visible as a sheen across the forehead.",
+
+        "alternative_captions": {
+          "direct": "Brows raised high. Eyes maximally wide, whites visible all around. Mouth gaping open, jaw dropped. Expression frozen at peak fear throughout. Forehead sweating.",
+          "literary": "His face has abandoned all pretense of composure — it is a flag of pure alarm, every muscle pulled to its maximum displacement, the eyes showing their whites like a spooked horse, the mouth open on a scream that may or may not be producing sound.",
+          "direction": "Maximum fear hold at distance. Brows as high as they go — stretch the forehead. Eyes: full sclera exposure, above AND below iris. Mouth: oval gape, jaw dropped, lips back. HOLD without variation for the full shot. No modulation, no building — this is sustained peak terror. The scale is small so the expression needs to be LARGE to read at 6% frame ratio.",
+          "situational": "With the helpless horror of someone watching violence happen within arm's reach and knowing he is next in line."
+        },
+
+        "facial_components": {
+          "eyes": "Maximally widened, sclera visible above and below iris, unblinking, fixed on the fight",
+          "eyebrows": "Raised as high as possible, horizontal forehead creases visible",
+          "mouth": "Open in gaping oval, lips pulled back laterally, lower jaw dropped",
+          "jaw": "Dropped fully, held open",
+          "gaze_direction": "left",
+          "head_pose": "frontal"
+        },
+
+        "facial_attributes": {
+          "apparent_gender": "male",
+          "apparent_age_range": "young_adult",
+          "glasses": false,
+          "facial_hair": "none",
+          "head_covering": "none",
+          "mask": false,
+          "makeup_visible": false,
+          "distinctive_notes": "Sweat sheen on forehead. Face at small scale — fine muscular detail limited but overall configuration clear."
+        },
+
+        "temporal_change": "static",
+        "micro_expression": false,
+
+        "observable_blendshape_hints": {
+          "brow_raise_inner": "strong",
+          "brow_raise_outer": "strong",
+          "brow_furrow": "none",
+          "eye_widen": "strong",
+          "eye_squint": "none",
+          "eye_blink_state": "open",
+          "cheek_raise": "none",
+          "nose_wrinkle": "slight",
+          "upper_lip_raise": "medium",
+          "lip_corner_pull": "medium",
+          "lip_corner_depress": "none",
+          "lip_tighten": "none",
+          "lip_part": "strong",
+          "jaw_clench": "none",
+          "jaw_drop": "strong"
+        },
+
+        "expression_confidence": 0.78
+      },
+
+      "body_analysis": {
+        "body_clearly_visible": true,
+        "shot_frame_of_body": "three_quarter",
+        "visible_body_parts": ["head", "neck", "shoulders", "upper_arms", "forearms", "hands", "torso", "hips", "thighs"],
+
+        "motion_caption": "He scrambles backward along the corridor wall in an uncoordinated retreat. His back is pressed against the concrete surface, shoulders scraping as he pushes off with his left foot to slide rightward. His right hand is raised to head height with the palm outward — a reflexive protective gesture, shielding the face from the violence happening beside him. His left hand is behind him, palm flat against the wall, fingers splayed, using the surface as a guide and stabilizer for his lateral escape. His knees are bent, center of gravity low, and his weight shifts unevenly from foot to foot as he moves — each step is a scramble rather than a stride. His torso is pressed backward into the wall, chin tucked into his chest, making himself as small as possible.",
+
+        "alternative_captions": {
+          "direct": "He scrambles backward along the wall. Right hand raised palm-out at head height. Left hand flat against wall behind him. Knees bent, low center of gravity, uneven steps. Torso pressed to wall, chin tucked.",
+          "literary": "He tries to become the wall itself — pressing into it, sliding along it, his hands working independently of each other, one raised against what is coming, the other feeling for a way out that the corridor refuses to provide.",
+          "direction": "Panicked lateral scramble along the wall. Back pressed to concrete — show the scraping contact. Right hand up at head height, palm out — PROTECTIVE, not surrender. Left hand flat behind on wall — GUIDING, fingers splayed for surface contact. Knees bent, stay low. Steps uneven — this is scramble, not walking. Chin tucked to chest. Make the body as compact and wall-pressed as possible.",
+          "situational": "With the instinctive self-compression of a creature that cannot flee and is trying to become too small to notice."
+        },
+
+        "action_primary": "scrambling",
+        "action_quality": {
+          "intensity": "high",
+          "tone": "frantic",
+          "tempo": "irregular"
+        },
+        "body_focus": "upper_body",
+
+        "kinematics_hint": {
+          "periodicity": "non_periodic",
+          "symmetry": "bilateral_asymmetric",
+          "duration_class": "ongoing",
+          "trajectory": "linear"
+        },
+
+        "upper_body_detail": {
+          "head": "Tucked down, chin pressed toward chest, turning away from the violence",
+          "neck": "Compressed, buried between raised shoulders, protective contraction",
+          "shoulders": "Hunched upward around neck, pressed back against wall, scraping on concrete",
+          "arms": "Right: raised to head height, forearm vertical, palm outward in protective shield. Left: extended behind body, palm flat against wall for guidance.",
+          "hands": "Right: open palm facing outward at head height, fingers together, shielding face. Left: flat against wall surface behind body, fingers splayed for maximum contact and stability.",
+          "torso": "Pressed backward into wall, compressed, trying to minimize profile",
+          "posture": "crouching"
+        },
+
+        "gesture_detail": "Right hand is raised to head height with palm facing outward and fingers together — a reflexive face-shielding gesture, not a communicative stop signal. Left hand is flat against the wall behind and below the body with fingers splayed, maintaining continuous surface contact as a tactile guide during the lateral scramble. The two hands operate independently: one protects, the other navigates. Neither hand is performing a deliberate or communicative gesture.",
+        "hands_visible": true,
+
+        "interaction": {
+          "count": "triadic",
+          "contact": "none",
+          "relation": "parallel",
+          "interacts_with_person_index": [0, 1]
+        },
+
+        "motion_confidence": 0.83
+      }
+    }
+  ],
+
+  "interaction": {
+    "count": "triadic",
+    "contact": "incidental",
+    "relation": "opposing"
+  },
+
+  "quality_flags": {
+    "face_clearly_visible": true,
+    "body_clearly_visible": true,
+    "motion_blur": true,
+    "occlusion": "partial",
+    "lighting": "acceptable",
+    "camera_stable": true,
+    "frame_sampling_ok": true,
+    "vlm_confidence": 0.83
+  },
+
+  "usability_score": {
+    "face": 0.79,
+    "motion": 0.91
+  },
+
+  "exclusion_reason": null,
+
+  "meta": {
+    "vlm_model": "Qwen3-VL-32B-Instruct",
+    "vlm_version": "2026-04",
+    "frames_used": 8,
+    "infer_time_ms": 4200
+  }
+}

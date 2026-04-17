@@ -1,0 +1,169 @@
+{
+  "shot_id": "example_single_drama_001",
+  "source_movie": "The_Dinner_2017",
+
+  "shot_context": {
+    "shot_type": "close-up",
+    "shot_emotion_summary": "A tense moment of quiet realization; the character absorbs unwelcome news while maintaining composure.",
+    "shot_motion_summary": "Minimal upper-body movement. A slight forward lean and a single controlled hand gesture at chest height.",
+    "scene_context": {
+      "visible_setting": "Dimly lit restaurant interior, dark wood paneling, candlelight",
+      "narrative_situation": "A private conversation where uncomfortable truths surface",
+      "narrative_confidence": 0.7
+    }
+  },
+
+  "persons": [
+    {
+      "person_index": 0,
+      "spatial_position": "center",
+
+      "face_analysis": {
+        "face_clearly_visible": true,
+        "face_size_ratio": 0.35,
+
+        "primary_emotion": "complex",
+        "secondary_emotion": "contempt",
+        "valence": -0.3,
+        "arousal": 0.4,
+        "intensity": 0.6,
+
+        "expression_caption": "His expression shifts subtly across the shot. Initially composed with a neutral set to his mouth, his brows draw together slightly as he listens. By mid-shot, a faint tightening appears around the eyes — not quite a squint but a visible narrowing that suggests growing displeasure. His jaw sets incrementally, the masseter becoming defined. In the final frames, one corner of his mouth pulls down barely a millimeter, the only external sign of the contempt building beneath the surface. Throughout, his gaze remains fixed on the speaker, unblinking.",
+
+        "alternative_captions": {
+          "direct": "His brows draw together. His jaw tightens. The left corner of his mouth drops slightly. He does not blink.",
+          "literary": "Something hardens behind his eyes — not anger yet, but its architecture. His jaw locks by degrees, and when his lip finally moves, it is downward, a fraction, like a door closing on a conversation he has already ended internally.",
+          "direction": "Controlled disgust building over 4 seconds. Start neutral. Beat 1: inner brows down 2mm. Beat 2: jaw clench, visible masseter. Beat 3: left lip corner drop, barely perceptible. Eyes locked on scene partner throughout, no blink.",
+          "situational": "As if he has just confirmed a suspicion he hoped was wrong, and is now deciding how much of his disappointment to reveal — which turns out to be almost none."
+        },
+
+        "facial_components": {
+          "eyes": "Narrowed slightly, inner corners tense, no tears, steady and unblinking",
+          "eyebrows": "Inner brows drawn slightly downward, left marginally lower than right",
+          "mouth": "Initially closed and neutral, then lips press together, left corner drops fractionally",
+          "jaw": "Progressive clenching, masseter visible by mid-shot",
+          "gaze_direction": "left",
+          "head_pose": "frontal"
+        },
+
+        "facial_attributes": {
+          "apparent_gender": "male",
+          "apparent_age_range": "middle_aged",
+          "glasses": false,
+          "facial_hair": "stubble",
+          "head_covering": "none",
+          "mask": false,
+          "makeup_visible": false,
+          "distinctive_notes": "Deep forehead lines visible under tension. Small scar above right eyebrow."
+        },
+
+        "temporal_change": "building",
+        "micro_expression": false,
+
+        "observable_blendshape_hints": {
+          "brow_raise_inner": "none",
+          "brow_raise_outer": "none",
+          "brow_furrow": "medium",
+          "eye_widen": "none",
+          "eye_squint": "slight",
+          "eye_blink_state": "open",
+          "cheek_raise": "none",
+          "nose_wrinkle": "slight",
+          "upper_lip_raise": "none",
+          "lip_corner_pull": "none",
+          "lip_corner_depress": "slight",
+          "lip_tighten": "medium",
+          "lip_part": "none",
+          "jaw_clench": "medium",
+          "jaw_drop": "none"
+        },
+
+        "expression_confidence": 0.92
+      },
+
+      "body_analysis": {
+        "body_clearly_visible": true,
+
+        "shot_frame_of_body": "bust",
+        "visible_body_parts": ["head", "neck", "shoulders"],
+
+        "motion_caption": "Almost entirely still throughout the shot. His shoulders are level and held slightly forward in a closed posture. In the middle frames, there is a barely perceptible forward lean of perhaps two centimeters — his upper body shifting weight toward the table without his arms moving. The neck remains rigid, supporting the fixed head position. No hand gesture is visible; both hands are below frame.",
+
+        "alternative_captions": {
+          "direct": "He sits still with shoulders slightly forward. A faint forward lean occurs mid-shot. No visible hand movement.",
+          "literary": "He is a study in stillness — only the body knows, tilting forward by a breath's width, as though pulled by the gravity of what he is hearing.",
+          "direction": "Closed posture, shoulders rolled inward. On the key line, micro-lean forward, 2cm max, from the waist. No arm movement. Hold tension in the trapezius throughout.",
+          "situational": "With the coiled restraint of someone who wants to lean across the table and grab the other person but has decided, very deliberately, not to."
+        },
+
+        "action_primary": "sitting",
+        "action_quality": {
+          "intensity": "low",
+          "tone": "tense",
+          "tempo": "sustained"
+        },
+        "body_focus": "posture",
+
+        "kinematics_hint": {
+          "periodicity": "non_periodic",
+          "symmetry": "bilateral_symmetric",
+          "duration_class": "ongoing",
+          "trajectory": "static"
+        },
+
+        "upper_body_detail": {
+          "head": "Fixed, facing slightly left toward the other person, no tilt",
+          "neck": "Rigid, visible tension in sternocleidomastoid",
+          "shoulders": "Level, slightly rolled forward in closed posture, no movement",
+          "arms": "Not visible — below frame line",
+          "hands": "Not visible — below frame line",
+          "torso": "Slight forward lean developing mid-shot, approximately 2cm",
+          "posture": "sitting"
+        },
+
+        "gesture_detail": "No gestures visible. Both arms are below the bust frame line.",
+        "hands_visible": false,
+
+        "interaction": {
+          "count": "solo",
+          "contact": "none",
+          "relation": "parallel",
+          "interacts_with_person_index": []
+        },
+
+        "motion_confidence": 0.88
+      }
+    }
+  ],
+
+  "interaction": {
+    "count": "solo",
+    "contact": "none",
+    "relation": "parallel"
+  },
+
+  "quality_flags": {
+    "face_clearly_visible": true,
+    "body_clearly_visible": true,
+    "motion_blur": false,
+    "occlusion": "none",
+    "lighting": "low",
+    "camera_stable": true,
+    "frame_sampling_ok": true,
+    "vlm_confidence": 0.91
+  },
+
+  "usability_score": {
+    "face": 0.93,
+    "motion": 0.65
+  },
+
+  "exclusion_reason": null,
+
+  "meta": {
+    "vlm_model": "Qwen3-VL-32B-Instruct",
+    "vlm_version": "2026-04",
+    "frames_used": 8,
+    "infer_time_ms": 2100
+  }
+}

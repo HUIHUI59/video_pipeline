@@ -1,0 +1,281 @@
+# motion_taxonomy.yaml — Official Motion Categorization Vocabulary
+# Project: Video_DB_Face
+# Version: 1.0 (2026-04-16)
+#
+# USAGE:
+#   - VLM prompt builder: inject leaf values into guided_json enum
+#   - Post-processing: validate action_primary against this list
+#   - Validator script: loads this file as authority
+#
+# RULES:
+#   - action_primary output MUST be a leaf value (e.g. "walking", not "locomotion")
+#   - If no leaf fits, use "other/<single_lowercase_word>"
+#   - Do NOT add new leaves without upstream approval
+#   - Categories are for grouping only — never output category names
+
+# ============================================================
+# AXIS 1: action_primary (hierarchical: category → leaf)
+# ============================================================
+action_primary:
+  locomotion:
+    description: "Whole-body displacement or weight shift"
+    leaves:
+      - walking
+      - running
+      - moving          # generic displacement when specific verb unclear
+      - positioning     # adjusting body position without locomotion
+      - leaning         # weight shift toward a surface or direction
+      - turning         # rotating body orientation
+      - stepping        # single deliberate step (not continuous walk)
+      - stumbling       # uncontrolled locomotion
+
+  manipulation:
+    description: "Using hands/arms to interact with objects or space"
+    leaves:
+      - reaching        # extending arm toward something
+      - carrying        # holding while moving
+      - holding         # static grip on object
+      - grasping        # closing hand around object
+      - clasping        # interlocking fingers or gripping tightly
+      - releasing       # letting go of object
+      - lifting         # raising object or body part
+      - placing         # setting object down deliberately
+      - pushing         # applying force away from body
+      - pulling         # applying force toward body
+      - writing         # pen/keyboard operation
+      - pouring         # liquid transfer
+      - opening         # doors, containers, etc.
+      - closing         # doors, containers, etc.
+
+  posture:
+    description: "Static body configuration or configuration change"
+    leaves:
+      - standing
+      - sitting
+      - kneeling
+      - lying
+      - crouching
+      - reclining       # leaned back in seat or surface
+      - bending         # forward flexion at waist
+      - straightening   # returning from bent position
+
+  communication:
+    description: "Body-mediated social signals (excluding face)"
+    leaves:
+      - talking         # visible speech (lip/jaw movement, but body-level gestures)
+      - gesturing       # hand/arm communicative motion
+      - looking         # directed attention via head/body orientation
+      - focusing        # sustained attention posture
+      - interacting     # general social engagement (use more specific if possible)
+      - engaging        # initiating or sustaining interaction
+      - petting         # gentle repetitive touching (person or animal)
+      - nodding         # head affirmation
+      - shaking_head    # head negation
+      - shrugging       # shoulder rise for uncertainty
+      - pointing        # directional indication
+      - waving          # hand greeting or farewell
+      - beckoning       # inviting gesture
+      - hugging         # embrace
+      - clapping        # applause
+
+  impact:
+    description: "Forceful, often single-event actions (rare in film, high training value)"
+    tier3_boost: true   # auto-candidate for Tier 3 gold curation
+    leaves:
+      - kicking
+      - spiking
+      - striking        # hitting with hand/arm
+      - throwing
+      - catching
+      - punching
+      - slapping
+      - blocking        # defensive motion against incoming force
+      - jumping
+      - landing
+      - falling
+      - diving
+
+  self_directed:
+    description: "Actions directed at own body"
+    leaves:
+      - adjusting       # clothing, glasses, hair
+      - scratching
+      - rubbing         # face/neck/arm self-soothing
+      - wiping          # tears, sweat, surface
+      - stretching
+      - yawning
+      - breathing_heavy # visible labored breathing
+      - fidgeting       # small repetitive nervous motions
+      - smoking
+      - drinking
+      - eating
+
+  other:
+    description: "Catch-all for unlisted actions. Format: other/<single_word>"
+    examples:
+      - "other/rappelling"
+      - "other/juggling"
+      - "other/headbutting"
+    note: "Reviewed monthly. Frequent entries (usage_count > 50) promoted to a category."
+
+# ============================================================
+# AXIS 2: action_quality (three independent dimensions)
+# ============================================================
+action_quality:
+  intensity:
+    description: "Energetic magnitude of the motion"
+    values:
+      - low             # calm, static, minimal, gentle
+      - mid             # deliberate, focused, measured
+      - high            # intense, powerful, dynamic, energetic, urgent, frantic
+
+  tone:
+    description: "Internal tension register conveyed through motion quality"
+    values:
+      - relaxed         # loose, at ease, no visible tension
+      - tense           # tight muscles, guarded posture
+      - controlled      # deliberate restraint, precision
+      - contemplative   # slow, thoughtful, internally focused
+
+  tempo:
+    description: "Temporal rhythm of the motion (cross-checked with optical flow)"
+    values:
+      - sustained       # continuous, even pace
+      - punctuated      # bursts separated by pauses
+      - accelerating    # increasing speed over the shot
+      - decelerating    # decreasing speed over the shot
+
+# ============================================================
+# AXIS 3: body_focus
+# ============================================================
+body_focus:
+  description: "Which body region drives the primary action in this shot"
+  values:
+    - upper_body        # shoulders, arms, torso collectively
+    - hands             # hand-specific action (writing, fidgeting, pointing)
+    - torso             # twist, lean, posture shifts
+    - posture           # whole-body configuration change (sit→stand)
+    - gesture           # communicative arm/hand motion
+    - full_body         # rare in film — entire body drives action
+    - lower_body        # rare — legs/feet drive action
+    - face_and_gaze     # head turn / gaze shift drives the scene (shared with face)
+
+# ============================================================
+# AXIS 4: kinematics_hint
+# ============================================================
+kinematics_hint:
+  trajectory:
+    description: "Spatial path of the primary moving body part"
+    values:
+      - linear          # straight-line motion
+      - arc             # curved path (arm swing, head turn)
+      - circular        # repeating loop
+      - erratic         # unpredictable path
+      - static          # no spatial displacement
+
+  periodicity:
+    description: "Whether the motion repeats cyclically"
+    values:
+      - periodic        # walking, rocking, tapping
+      - non_periodic    # reaching, turning, single gesture
+
+  symmetry:
+    description: "Left-right symmetry of body motion"
+    values:
+      - bilateral_symmetric   # both sides move similarly (jumping jacks)
+      - bilateral_asymmetric  # most common — one arm gestures, other rests
+      - axial                 # rotation around body axis (turning)
+
+  duration_class:
+    description: "Temporal profile of the action within the shot"
+    values:
+      - onset_only      # action begins but shot ends before completion
+      - ongoing         # action continues throughout the shot
+      - peak_then_release  # action builds, peaks, then settles
+
+# ============================================================
+# AXIS 5: interaction
+# ============================================================
+interaction:
+  count:
+    description: "Number of meaningfully active people in the shot"
+    values:
+      - solo            # 1 person
+      - dyadic          # 2 people
+      - triadic         # 3 people
+      - crowd           # 4+ people (rarely used for training)
+
+  contact:
+    description: "Physical contact between people"
+    values:
+      - none            # no physical contact
+      - incidental      # brief or accidental (brush, tap)
+      - sustained       # prolonged (hug, handshake, fight)
+
+  relation:
+    description: "Structural relationship of motion between people"
+    values:
+      - parallel        # same direction, independent actions
+      - coordinated     # collaborative (handing object, dancing together)
+      - opposing        # confrontational (arguing, fighting)
+      - hierarchical    # one directs, other follows
+
+# ============================================================
+# SHOT FRAMING (not an axis — metadata for filtering)
+# ============================================================
+shot_frame_of_body:
+  description: "How much of the body is visible in the camera frame"
+  values:
+    - close_face        # only face + neck — body_analysis usually null
+    - bust              # head to mid-chest — very common in film dialogue
+    - half_body         # head to waist — arms/hands usually visible
+    - three_quarter     # head to mid-thigh — standard medium shot
+    - full_body         # entire body visible — RARE in film (<10%)
+    - wide              # body small in frame — multiple subjects possible
+
+# ============================================================
+# EMOTION VOCABULARY (for face_analysis, reference only)
+# ============================================================
+primary_emotion:
+  values:
+    - anger
+    - sadness
+    - joy
+    - fear
+    - surprise
+    - disgust
+    - contempt
+    - neutral
+    - complex           # two or more genuinely inseparable emotions
+
+# ============================================================
+# CAMERA TERMS — FORBIDDEN in action/body/kinematics fields
+# ============================================================
+forbidden_in_action_fields:
+  note: "These are CAMERA terms. Never place them in action_primary, action_quality, body_focus, or kinematics_hint."
+  terms:
+    - close-up
+    - medium shot
+    - wide shot
+    - medium close-up
+    - extreme close-up
+    - long shot
+    - establishing shot
+    - eye-level
+    - low angle
+    - high angle
+    - dutch
+    - overhead
+    - bird's eye
+    - frontal
+    - side
+    - profile
+    - steady
+    - handheld
+    - static
+    - tracking
+    - pan
+    - tilt
+    - zoom
+    - dolly
+    - crane
