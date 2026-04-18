@@ -5,9 +5,9 @@
 # ═══════════════════════════════════════════════════════════════
 
 pod:
-  host: 100.64.1.23          # Runpod Pod 公网 IP
+  host: 157.66.254.40         # Runpod Pod 公网 IP
   port: 22100                # Pod SSH 端口（Runpod 网页 connect 面板里能拿到）
-  user: root                 # Runpod Pod 默认用户
+  user: 14562               # Runpod Pod 默认用户
   ssh_key: ~/.ssh/id_ed25519 # 你添加到 Runpod 账号的 SSH 私钥
 
 paths:

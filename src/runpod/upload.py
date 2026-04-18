@@ -65,16 +65,26 @@ def _iter_manifest_lines(manifest_dir: str,
 
 def _filter_entries(entries: list[tuple[str, ManifestEntry]],
                     categories: list[str] | None,
-                    max_shots: int | None
+                    max_shots: int | None,
+                    skip_bad_quality: bool = True,
                     ) -> list[tuple[str, ManifestEntry]]:
     out = []
+    skipped_quality = 0
     cat_set = set(categories) if categories else None
     for movie, e in entries:
         if cat_set and e.shot_category not in cat_set:
             continue
+        # 画质过滤：quality_ok == False 就跳
+        # quality_ok == None 表示旧版 manifest（没有该字段），不过滤
+        if skip_bad_quality and e.quality_ok is False:
+            skipped_quality += 1
+            continue
         out.append((movie, e))
         if max_shots and len(out) >= max_shots:
             break
+    if skipped_quality:
+        print(f"  [quality] 跳过画质不合格镜头 {skipped_quality} 个"
+              f"（--include-bad-quality 可关闭此过滤）")
     return out
 
 

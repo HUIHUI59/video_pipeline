@@ -241,6 +241,8 @@ python process_videos.py /mnt/movies/Films /mnt/movies/Films/output \
 
 ## Stage 5：Runpod 云端标注（手动工作流，不走 dispatcher）
 
+> 📖 **详细手册**：[docs/RUNPOD_MANUAL.md](./RUNPOD_MANUAL.md) — 第一次用 Runpod 必读，包含注册、SSH、Network Volume、Pod 选型、费用优化、常见坑和排错。下面只是快速摘要。
+
 用 Runpod 租 H100 Pod 跑 **Qwen3-VL-32B-Instruct + vLLM guided_json**，严格输出 `docs/labelingStandards/json_schema_integrated.md` 规定的 schema。
 
 **前置条件**：Stage 4 已产出 `<output_dir>/manifest/<movie>.jsonl`（每个镜头一行 shot_id / shot_category / num_people 等）。

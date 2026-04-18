@@ -121,6 +121,168 @@ def get_yolo(model_path: str):
             _yolo_cache[model_path] = None
         return _yolo_cache[model_path]
 
+
+# ── 脸检测：OpenCV Haar Cascade（opencv-python 自带，无需下载）────────
+# 优先级：
+#   1. 本地已下载的 YOLO face 模型（yolo_face_path，若存在）—— 最准
+#   2. OpenCV Haar Cascade（随 opencv-python 自带）—— 通用 fallback
+#   3. None —— 警告后降级为仅人体检测
+_face_detector = None
+_face_backend: str = ""          # "yolo_face" | "haar" | "none"
+_face_lock = threading.Lock()
+
+def get_face_detector(yolo_face_path: str | None = None):
+    global _face_detector, _face_backend
+    if _face_detector is not None or _face_backend == "none":
+        return _face_detector, _face_backend
+    with _face_lock:
+        if _face_detector is not None or _face_backend == "none":
+            return _face_detector, _face_backend
+
+        # 1) 优先用本地 YOLO face 模型
+        if yolo_face_path:
+            try:
+                from ultralytics import YOLO
+                p = Path(yolo_face_path).expanduser()
+                if p.exists() or not yolo_face_path.endswith(".pt") is False:
+                    # 只在文件存在时加载，避免触发 ultralytics 的网络下载
+                    if p.exists():
+                        _face_detector = YOLO(str(p))
+                        _face_backend = "yolo_face"
+                        log.info(f"脸检测：使用 YOLO {yolo_face_path}")
+                        return _face_detector, _face_backend
+            except Exception as e:
+                log.info(f"YOLO face 模型不可用 ({e})，使用 OpenCV Haar")
+
+        # 2) OpenCV Haar Cascade（opencv-python 自带）
+        try:
+            import cv2
+            xml = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+            cas = cv2.CascadeClassifier(xml)
+            if cas.empty():
+                raise RuntimeError(f"Haar cascade xml 加载为空: {xml}")
+            _face_detector = cas
+            _face_backend = "haar"
+            log.info("脸检测：使用 OpenCV Haar Cascade")
+            return _face_detector, _face_backend
+        except Exception as e:
+            log.warning(f"Haar Cascade 加载失败 ({e})")
+
+        _face_backend = "none"
+        log.warning(
+            "所有脸检测后端均不可用。分类器只用人体检测，有人的镜头会归 wide。"
+        )
+        return None, _face_backend
+
+
+def detect_faces(frame) -> tuple[int, list[float]]:
+    """返回 (脸数, 脸框面积占帧比例列表)。"""
+    det, backend = get_face_detector()
+    if det is None:
+        return 0, []
+
+    if backend == "yolo_face":
+        return _detect_boxes(det, frame, DEFAULT_FACE_CONF, class_filter=None)
+
+    if backend == "haar":
+        try:
+            import cv2
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            # Haar 对正脸敏感，侧脸容易漏；阈值从默认放宽提高 recall
+            faces = det.detectMultiScale(
+                gray, scaleFactor=1.1, minNeighbors=4,
+                minSize=(24, 24))
+        except Exception:
+            return 0, []
+        if len(faces) == 0:
+            return 0, []
+        h, w = frame.shape[:2]
+        area = max(w * h, 1)
+        ratios = [float((fw * fh) / area) for (_fx, _fy, fw, fh) in faces]
+        return len(faces), ratios
+
+    return 0, []
+
+
+# ── 脸检测：优先 MediaPipe（pip 即装，无需外部模型），退化到 YOLO face ─
+_face_detector = None
+_face_backend: str = ""          # "mediapipe" | "yolo_face" | "none"
+_face_lock = threading.Lock()
+
+def get_face_detector(yolo_face_path: str | None = None):
+    """
+    脸检测器：返回 (detector_obj, backend_str)。
+    - 优先试 mediapipe（最稳定，pip install mediapipe）
+    - 退化到 ultralytics YOLO(yolo_face_path) —— 若该路径是已下载的脸模型
+    - 都没有 → 返回 (None, "none")，调用方会降级为仅人体检测
+    """
+    global _face_detector, _face_backend
+    if _face_detector is not None or _face_backend == "none":
+        return _face_detector, _face_backend
+    with _face_lock:
+        if _face_detector is not None or _face_backend == "none":
+            return _face_detector, _face_backend
+
+        # 尝试 MediaPipe
+        try:
+            import mediapipe as mp
+            _face_detector = mp.solutions.face_detection.FaceDetection(
+                model_selection=1,          # 1 = full range (up to ~5m)
+                min_detection_confidence=0.5,
+            )
+            _face_backend = "mediapipe"
+            log.info("脸检测：使用 MediaPipe")
+            return _face_detector, _face_backend
+        except Exception as e:
+            log.info(f"MediaPipe 不可用 ({e})，尝试 YOLO face 模型")
+
+        # 退化到 YOLO face 模型（如果本地有文件）
+        if yolo_face_path:
+            try:
+                from ultralytics import YOLO
+                if Path(yolo_face_path).expanduser().exists() or \
+                   Path(os.path.expanduser(f"~/.cache/{yolo_face_path}")).exists():
+                    _face_detector = YOLO(yolo_face_path)
+                    _face_backend = "yolo_face"
+                    log.info(f"脸检测：使用 YOLO {yolo_face_path}")
+                    return _face_detector, _face_backend
+            except Exception as e:
+                log.warning(f"YOLO face 模型 {yolo_face_path} 加载失败: {e}")
+
+        _face_backend = "none"
+        log.warning(
+            "脸检测不可用。推荐：pip install mediapipe；"
+            "或下载 yolov8n-face.pt 放到当前目录。"
+            "分类器将只用人体检测，close-up 无法区分（都判为 wide）。"
+        )
+        return None, _face_backend
+
+
+def detect_faces(frame) -> tuple[int, list[float]]:
+    """返回 (脸数, 脸框面积占帧比例列表)。后端自动选择。"""
+    det, backend = get_face_detector()
+    if det is None:
+        return 0, []
+    if backend == "mediapipe":
+        try:
+            import cv2
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            results = det.process(rgb)
+        except Exception:
+            return 0, []
+        if not results.detections:
+            return 0, []
+        ratios = []
+        for d in results.detections:
+            b = d.location_data.relative_bounding_box
+            # MediaPipe 返回相对坐标，面积直接是 width*height
+            if b.width > 0 and b.height > 0:
+                ratios.append(float(b.width * b.height))
+        return len(ratios), ratios
+    if backend == "yolo_face":
+        return _detect_boxes(det, frame, DEFAULT_FACE_CONF, class_filter=None)
+    return 0, []
+
 def _manifest_lock(path: str) -> threading.Lock:
     with _manifest_lock_guard:
         lk = _manifest_locks.get(path)
@@ -219,8 +381,8 @@ def classify_one(src: str, manifest_dir: str,
         res.error = f"无法加载 person 模型 {model_path}"
         if queue: queue.mark_failed(src, res.error)
         return res
-    # 脸模型允许加载失败（降级：仅用人体框）
-    yolo_face = get_yolo(face_model_path)
+    # 脸检测器初始化（MediaPipe 优先，退化 YOLO face；都失败则 None）
+    get_face_detector(face_model_path)
 
     cap = cv2.VideoCapture(src)
     if not cap.isOpened():
@@ -251,7 +413,7 @@ def classify_one(src: str, manifest_dir: str,
         if not ok or frame is None:
             continue
         p_n, p_r = _detect_boxes(yolo_person, frame, person_conf, class_filter=[0])
-        f_n, f_r = _detect_boxes(yolo_face,   frame, face_conf,   class_filter=None)
+        f_n, f_r = detect_faces(frame)
         per_frame.append({
             "persons":  p_n, "p_ratios": p_r,
             "faces":    f_n, "f_ratios": f_r,

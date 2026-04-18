@@ -113,15 +113,29 @@ SYSTEM_PROMPT = (
 
 
 def _user_prompt(entry: ManifestEntry, n_frames: int) -> str:
-    return (
-        f"Shot ID: {entry.shot_id}\n"
-        f"Source movie: {entry.source_movie}\n"
-        f"Shot category (from manifest): {entry.shot_category}\n"
-        f"Num people (from manifest, trust this): {entry.num_people}\n"
-        f"Duration: {entry.duration_sec:.2f}s  Resolution: {entry.width}x{entry.height}  FPS: {entry.fps}\n"
-        f"Frames sampled: {n_frames} (uniformly across the shot)\n\n"
-        f"Produce the ShotLabel JSON."
-    )
+    lines = [
+        f"Shot ID: {entry.shot_id}",
+        f"Source movie: {entry.source_movie}",
+        f"Shot category (from manifest): {entry.shot_category}",
+        f"Num people (from manifest, trust this): {entry.num_people}",
+    ]
+    # Stage 4 v2 additional hints（v1 旧 manifest 没有这些字段）
+    if entry.num_faces is not None:
+        lines.append(
+            f"Num faces visible (trust this, order persons by face size): "
+            f"{entry.num_faces}")
+    if entry.largest_face_ratio is not None:
+        lines.append(
+            f"Largest face occupies approximately "
+            f"{entry.largest_face_ratio*100:.1f}% of the frame")
+    lines += [
+        f"Duration: {entry.duration_sec:.2f}s  "
+        f"Resolution: {entry.width}x{entry.height}  FPS: {entry.fps}",
+        f"Frames sampled: {n_frames} (uniformly across the shot)",
+        "",
+        "Produce the ShotLabel JSON.",
+    ]
+    return "\n".join(lines)
 
 
 def main() -> int:
