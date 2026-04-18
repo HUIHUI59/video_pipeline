@@ -1,0 +1,586 @@
+# motion_synonyms.yaml — Normalization & Synonym Dictionary
+# Project: Video_DB_Face
+# Version: 1.0 (2026-04-16)
+#
+# USAGE:
+#   1. Post-processing script loads this file after VLM inference.
+#   2. For each action_primary value in output JSON:
+#      a. Check verb_forms → replace with canonical.
+#      b. Check synonyms → replace with canonical.
+#      c. Check camera_terms_forbidden → REMOVE from action fields, log warning.
+#      d. Check intensity_remap → move to action_quality.intensity instead.
+#   3. Validator script uses this for cross-checking.
+#
+# FORMAT:
+#   key: canonical_value  — meaning "if you see <key>, replace with <canonical_value>"
+
+# ============================================================
+# VERB FORM NORMALIZATION (tense/plurality → base -ing form)
+# ============================================================
+verb_forms:
+  # locomotion
+  walks: walking
+  walked: walking
+  walk: walking
+  runs: running
+  ran: running
+  run: running
+  moves: moving
+  moved: moving
+  move: moving
+  leans: leaning
+  leaned: leaning
+  lean: leaning
+  turns: turning
+  turned: turning
+  turn: turning
+  steps: stepping
+  stepped: stepping
+  step: stepping
+  stumbles: stumbling
+  stumbled: stumbling
+
+  # manipulation
+  reaches: reaching
+  reached: reaching
+  reach: reaching
+  carries: carrying
+  carried: carrying
+  carry: carrying
+  holds: holding
+  held: holding
+  hold: holding
+  grasps: grasping
+  grasped: grasping
+  grasp: grasping
+  clasps: clasping
+  clasped: clasping
+  clasp: clasping
+  releases: releasing
+  released: releasing
+  release: releasing
+  lifts: lifting
+  lifted: lifting
+  lift: lifting
+  places: placing
+  placed: placing
+  place: placing
+  pushes: pushing
+  pushed: pushing
+  push: pushing
+  pulls: pulling
+  pulled: pulling
+  pull: pulling
+  writes: writing
+  wrote: writing
+  write: writing
+  pours: pouring
+  poured: pouring
+  pour: pouring
+  opens: opening
+  opened: opening
+  open: opening
+  closes: closing
+  closed: closing
+  close: closing
+
+  # posture
+  stands: standing
+  stood: standing
+  stand: standing
+  sits: sitting
+  sat: sitting
+  sit: sitting
+  kneels: kneeling
+  knelt: kneeling
+  kneel: kneeling
+  lies: lying
+  lay: lying
+  laid: lying
+  lie: lying
+  crouches: crouching
+  crouched: crouching
+  crouch: crouching
+  reclines: reclining
+  reclined: reclining
+  bends: bending
+  bent: bending
+  bend: bending
+  straightens: straightening
+  straightened: straightening
+
+  # communication
+  talks: talking
+  talked: talking
+  talk: talking
+  gestures: gesturing
+  gestured: gesturing
+  gesture: gesturing
+  looks: looking
+  looked: looking
+  look: looking
+  focuses: focusing
+  focused: focusing
+  focus: focusing
+  interacts: interacting
+  interacted: interacting
+  interact: interacting
+  engages: engaging
+  engaged: engaging
+  engage: engaging
+  pets: petting
+  petted: petting
+  pet: petting
+  nods: nodding
+  nodded: nodding
+  nod: nodding
+  shrugs: shrugging
+  shrugged: shrugging
+  shrug: shrugging
+  points: pointing
+  pointed: pointing
+  point: pointing
+  waves: waving
+  waved: waving
+  wave: waving
+  beckons: beckoning
+  beckoned: beckoning
+  hugs: hugging
+  hugged: hugging
+  hug: hugging
+  claps: clapping
+  clapped: clapping
+  clap: clapping
+
+  # impact
+  kicks: kicking
+  kicked: kicking
+  kick: kicking
+  spikes: spiking
+  spiked: spiking
+  spike: spiking
+  strikes: striking
+  struck: striking
+  strike: striking
+  throws: throwing
+  threw: throwing
+  throw: throwing
+  catches: catching
+  caught: catching
+  catch: catching
+  punches: punching
+  punched: punching
+  punch: punching
+  slaps: slapping
+  slapped: slapping
+  slap: slapping
+  blocks: blocking
+  blocked: blocking
+  block: blocking
+  jumps: jumping
+  jumped: jumping
+  jump: jumping
+  lands: landing
+  landed: landing
+  land: landing
+  falls: falling
+  fell: falling
+  fall: falling
+  dives: diving
+  dove: diving
+  dive: diving
+
+  # self_directed
+  adjusts: adjusting
+  adjusted: adjusting
+  adjust: adjusting
+  scratches: scratching
+  scratched: scratching
+  scratch: scratching
+  rubs: rubbing
+  rubbed: rubbing
+  rub: rubbing
+  wipes: wiping
+  wiped: wiping
+  wipe: wiping
+  stretches: stretching
+  stretched: stretching
+  stretch: stretching
+  yawns: yawning
+  yawned: yawning
+  yawn: yawning
+  fidgets: fidgeting
+  fidgeted: fidgeting
+  fidget: fidgeting
+  smokes: smoking
+  smoked: smoking
+  smoke: smoking
+  drinks: drinking
+  drank: drinking
+  drink: drinking
+  eats: eating
+  ate: eating
+  eat: eating
+
+# ============================================================
+# SYNONYM MAPPING (different words → canonical leaf)
+# ============================================================
+synonyms:
+  # locomotion synonyms
+  strolling: walking
+  striding: walking
+  pacing: walking
+  marching: walking
+  ambling: walking
+  trudging: walking
+  shuffling: walking
+  sauntering: walking
+  jogging: running
+  sprinting: running
+  dashing: running
+  rushing: running
+  fleeing: running
+  bolting: running
+  hurrying: running
+  shifting: positioning
+  repositioning: positioning
+  scooting: positioning
+  tilting: leaning
+  slouching: leaning
+  hunching: leaning
+  swaying: leaning
+  inclining: leaning
+  rotating: turning
+  pivoting: turning
+  swiveling: turning
+  spinning: turning
+  tripping: stumbling
+  staggering: stumbling
+  wobbling: stumbling
+
+  # manipulation synonyms
+  grabbing: grasping
+  snatching: grasping
+  seizing: grasping
+  clutching: holding
+  gripping: holding
+  cradling: holding
+  embracing_object: holding
+  tossing: throwing
+  hurling: throwing
+  flinging: throwing
+  lobbing: throwing
+  shoving: pushing
+  pressing: pushing
+  dragging: pulling
+  tugging: pulling
+  yanking: pulling
+  scooping: lifting
+  hoisting: lifting
+  raising: lifting
+  lowering: placing
+  depositing: placing
+  setting_down: placing
+  typing: writing
+  scribbling: writing
+  signing: writing
+  uncapping: opening
+  unsealing: opening
+  shutting: closing
+  sealing: closing
+
+  # posture synonyms
+  upright: standing
+  erect: standing
+  seated: sitting
+  perched: sitting
+  squatting: crouching
+  ducking: crouching
+  prostrate: lying
+  supine: lying
+  prone: lying
+  sprawled: lying
+  lounging: reclining
+  stooping: bending
+  hunching_over: bending
+
+  # communication synonyms
+  speaking: talking
+  chatting: talking
+  whispering: talking
+  murmuring: talking
+  yelling: talking
+  shouting: talking
+  arguing: talking
+  conversing: talking
+  discussing: talking
+  motioning: gesturing
+  signaling: gesturing
+  indicating: gesturing
+  gazing: looking
+  staring: looking
+  glancing: looking
+  peering: looking
+  observing: looking
+  watching: looking
+  scanning: looking
+  inspecting: looking
+  concentrating: focusing
+  attending: focusing
+  caressing: petting
+  stroking: petting
+  patting: petting
+  agreeing_head: nodding
+  dismissing_shoulders: shrugging
+  directing: pointing
+  indicating_direction: pointing
+  greeting_hand: waving
+  farewell_hand: waving
+  summoning: beckoning
+  calling_over: beckoning
+  embracing_person: hugging
+  applauding: clapping
+
+  # impact synonyms
+  booting: kicking
+  stomping: kicking
+  smashing: striking
+  hitting: striking
+  swinging_at: striking
+  batting: striking
+  hammering: striking
+  tapping_hard: striking
+  socking: punching
+  jabbing: punching
+  swatting: slapping
+  smacking: slapping
+  deflecting: blocking
+  parrying: blocking
+  shielding: blocking
+  leaping: jumping
+  springing: jumping
+  vaulting: jumping
+  hopping: jumping
+  bounding: jumping
+  descending: landing
+  touching_down: landing
+  collapsing: falling
+  tumbling: falling
+  dropping: falling
+  plunging: diving
+  lunging: diving
+
+  # self_directed synonyms
+  fixing_clothes: adjusting
+  straightening_tie: adjusting
+  smoothing: adjusting
+  grooming: adjusting
+  itching: scratching
+  massaging: rubbing
+  toweling: wiping
+  dabbing: wiping
+  mopping_brow: wiping
+  limbering: stretching
+  flexing: stretching
+  squirming: fidgeting
+  twitching: fidgeting
+  wringing_hands: fidgeting
+  sipping: drinking
+  gulping: drinking
+  swallowing: drinking
+  chewing: eating
+  biting: eating
+  munching: eating
+  inhaling_smoke: smoking
+  puffing: smoking
+
+# ============================================================
+# CAMERA TERMS — FORBIDDEN in any action/body/kinematics field
+# Auto-removed by normalization script with WARNING log
+# ============================================================
+camera_terms_forbidden:
+  - close-up
+  - "close up"
+  - closeup
+  - medium shot
+  - "medium-shot"
+  - wide shot
+  - "wide-shot"
+  - medium close-up
+  - "medium close up"
+  - extreme close-up
+  - long shot
+  - establishing shot
+  - eye-level
+  - "eye level"
+  - low angle
+  - "low-angle"
+  - high angle
+  - "high-angle"
+  - dutch
+  - dutch angle
+  - overhead
+  - "bird's eye"
+  - frontal
+  - side view
+  - profile
+  - profile view
+  - steady
+  - steadicam
+  - handheld
+  - hand-held
+  - static
+  - tracking
+  - tracking shot
+  - pan
+  - panning
+  - tilt
+  - tilting
+  - zoom
+  - zooming
+  - dolly
+  - crane
+  - crane shot
+  - aerial
+  - POV
+  - point of view
+  - over the shoulder
+  - OTS
+  - two-shot
+  - insert
+  - cutaway
+  - reverse
+  - reaction shot
+
+# ============================================================
+# INTENSITY REMAP — values that belong to action_quality.intensity
+# If found in action_primary, move to intensity axis instead
+# ============================================================
+intensity_remap:
+  calm:
+    axis: action_quality.intensity
+    value: low
+  minimal:
+    axis: action_quality.intensity
+    value: low
+  gentle:
+    axis: action_quality.intensity
+    value: low
+  soft:
+    axis: action_quality.intensity
+    value: low
+  subtle:
+    axis: action_quality.intensity
+    value: low
+  moderate:
+    axis: action_quality.intensity
+    value: mid
+  steady_pace:
+    axis: action_quality.intensity
+    value: mid
+  intense:
+    axis: action_quality.intensity
+    value: high
+  powerful:
+    axis: action_quality.intensity
+    value: high
+  dynamic:
+    axis: action_quality.intensity
+    value: high
+  energetic:
+    axis: action_quality.intensity
+    value: high
+  urgent:
+    axis: action_quality.intensity
+    value: high
+  frantic:
+    axis: action_quality.intensity
+    value: high
+  vigorous:
+    axis: action_quality.intensity
+    value: high
+  forceful:
+    axis: action_quality.intensity
+    value: high
+  aggressive:
+    axis: action_quality.intensity
+    value: high
+  explosive:
+    axis: action_quality.intensity
+    value: high
+  violent:
+    axis: action_quality.intensity
+    value: high
+
+# ============================================================
+# TONE REMAP — values that belong to action_quality.tone
+# ============================================================
+tone_remap:
+  nervous:
+    axis: action_quality.tone
+    value: tense
+  anxious:
+    axis: action_quality.tone
+    value: tense
+  rigid:
+    axis: action_quality.tone
+    value: tense
+  stiff:
+    axis: action_quality.tone
+    value: tense
+  guarded:
+    axis: action_quality.tone
+    value: tense
+  defensive:
+    axis: action_quality.tone
+    value: tense
+  casual:
+    axis: action_quality.tone
+    value: relaxed
+  loose:
+    axis: action_quality.tone
+    value: relaxed
+  easy:
+    axis: action_quality.tone
+    value: relaxed
+  languid:
+    axis: action_quality.tone
+    value: relaxed
+  precise:
+    axis: action_quality.tone
+    value: controlled
+  careful:
+    axis: action_quality.tone
+    value: controlled
+  measured:
+    axis: action_quality.tone
+    value: controlled
+  deliberate:
+    axis: action_quality.tone
+    value: controlled
+  calculated:
+    axis: action_quality.tone
+    value: controlled
+  pensive:
+    axis: action_quality.tone
+    value: contemplative
+  reflective:
+    axis: action_quality.tone
+    value: contemplative
+  meditative:
+    axis: action_quality.tone
+    value: contemplative
+  thoughtful:
+    axis: action_quality.tone
+    value: contemplative
+  absent-minded:
+    axis: action_quality.tone
+    value: contemplative
+
+# ============================================================
+# NOTES
+# ============================================================
+# 1. Apply normalization in order: verb_forms → synonyms → camera_terms → intensity_remap → tone_remap
+# 2. If a token matches NONE of the above, and is not in taxonomy leaves, wrap as "other/<token>"
+# 3. Log all remaps to normalization_log.jsonl for monthly review
+# 4. Do NOT modify this file without upstream approval

@@ -67,14 +67,25 @@ def _filter_entries(entries: list[tuple[str, ManifestEntry]],
                     categories: list[str] | None,
                     max_shots: int | None,
                     skip_bad_quality: bool = True,
+                    skip_landscape: bool = True,
                     ) -> list[tuple[str, ManifestEntry]]:
+    """
+    依次过滤：
+      1. shot_category 不在 categories 白名单里 → 跳（categories 为空则不过滤）
+      2. shot_category == "landscape" 且 skip_landscape=True → 跳（无人标注无意义）
+      3. quality_ok == False 且 skip_bad_quality=True → 跳
+      4. 达到 max_shots 上限 → 停止
+    """
     out = []
-    skipped_quality = 0
+    skipped_quality   = 0
+    skipped_landscape = 0
     cat_set = set(categories) if categories else None
     for movie, e in entries:
         if cat_set and e.shot_category not in cat_set:
             continue
-        # 画质过滤：quality_ok == False 就跳
+        if skip_landscape and e.shot_category == "landscape":
+            skipped_landscape += 1
+            continue
         # quality_ok == None 表示旧版 manifest（没有该字段），不过滤
         if skip_bad_quality and e.quality_ok is False:
             skipped_quality += 1
@@ -82,6 +93,9 @@ def _filter_entries(entries: list[tuple[str, ManifestEntry]],
         out.append((movie, e))
         if max_shots and len(out) >= max_shots:
             break
+    if skipped_landscape:
+        print(f"  [landscape] 跳过无人镜头 {skipped_landscape} 个"
+              f"（--include-landscape 可关闭此过滤）")
     if skipped_quality:
         print(f"  [quality] 跳过画质不合格镜头 {skipped_quality} 个"
               f"（--include-bad-quality 可关闭此过滤）")
@@ -123,6 +137,8 @@ def main() -> int:
     ap.add_argument("--dry-run",       action="store_true", help="只打印 rsync 命令，不执行")
     ap.add_argument("--include-bad-quality", action="store_true",
                     help="即使 quality_ok=False 也上传（默认过滤掉太黑/太亮/模糊的镜头）")
+    ap.add_argument("--include-landscape", action="store_true",
+                    help="即使 shot_category=landscape 也上传（默认无人的镜头不标注）")
     args = ap.parse_args()
 
     cfg = _load_config(args.config)
@@ -149,10 +165,12 @@ def main() -> int:
                                     set(movies) if movies else None))
     print(f"  校验通过: {len(raw)} 条")
     filtered = _filter_entries(raw, categories, max_shots,
-                               skip_bad_quality=not args.include_bad_quality)
+                               skip_bad_quality=not args.include_bad_quality,
+                               skip_landscape=not args.include_landscape)
     print(f"  筛选后:   {len(filtered)} 条  "
           f"(categories={categories or 'all'}, movies={movies or 'all'}, "
-          f"max={max_shots or '∞'}, skip_bad_quality={not args.include_bad_quality})")
+          f"max={max_shots or '∞'}, skip_bad_quality={not args.include_bad_quality}, "
+          f"skip_landscape={not args.include_landscape})")
 
     if not filtered:
         print("[WARN] 没有符合条件的 shot，退出。")
@@ -190,10 +208,30 @@ def main() -> int:
         file_ops.append((str(pod_setup), f"{pod_workspace}/tools/pod_setup.sh"))
     file_ops.append((args.config, f"{pod_workspace}/runpod.yaml"))
 
+    # 推送 external_delivery_v1 bundle（官方 prompt 构造器 + normalize + validator
+    # + taxonomy/synonyms YAML + 9 个 few-shot 示例 JSON）到 Pod。
+    # pod_runner 运行时会 sys.path.insert 并 import 其中的脚本。
+    delivery_root = project_root / "docs" / "labelingStandards" / "external_delivery_v1"
+    if delivery_root.exists():
+        for p in delivery_root.rglob("*"):
+            if not p.is_file():
+                continue
+            name = p.name
+            # 跳过 Zone.Identifier（Windows 拷过来的元数据）
+            if name.endswith(":Zone.Identifier") or "Zone.Identifier" in name:
+                continue
+            # 只推白名单后缀（docs + scripts 需要的）
+            if p.suffix not in (".py", ".yaml", ".yml", ".md", ".json", ".txt"):
+                continue
+            rel = p.relative_to(delivery_root)
+            dst = f"{pod_workspace}/delivery_v1/{rel.as_posix()}"
+            file_ops.append((str(p), dst))
+
     print(f"\n  目标 Pod: {pod['user']}@{pod['host']}:{pod['port']}  workspace={pod_workspace}")
     mkdir_cmd = (["ssh"] + _ssh_opts(pod) +
                  [f"{pod['user']}@{pod['host']}",
-                  f"mkdir -p {pod_workspace}/clips {pod_workspace}/src/runpod {pod_workspace}/tools"])
+                  f"mkdir -p {pod_workspace}/clips {pod_workspace}/src/runpod "
+                  f"{pod_workspace}/tools {pod_workspace}/delivery_v1"])
     print("  $", " ".join(shlex.quote(c) for c in mkdir_cmd))
     if not args.dry_run:
         subprocess.run(mkdir_cmd, check=False)

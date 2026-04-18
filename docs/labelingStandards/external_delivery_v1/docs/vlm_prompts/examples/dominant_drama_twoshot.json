@@ -1,0 +1,286 @@
+{
+  "shot_id": "example_dominant_drama_005",
+  "source_movie": "Marriage_Story_2019",
+
+  "shot_context": {
+    "shot_type": "medium close-up",
+    "shot_emotion_summary": "Emotional confrontation: the primary figure expresses anguished anger, the secondary figure withdraws into defensive sadness.",
+    "shot_motion_summary": "Primary: aggressive forward lean with emphatic hand gesture at table. Secondary: pulls back, arms crossing protectively.",
+    "scene_context": {
+      "visible_setting": "Small apartment living room, warm lamplight, scattered papers on a table between them",
+      "narrative_situation": "A marital argument reaching its emotional climax",
+      "narrative_confidence": 0.8
+    }
+  },
+
+  "persons": [
+    {
+      "person_index": 0,
+      "spatial_position": "left",
+
+      "face_analysis": {
+        "face_clearly_visible": true,
+        "face_size_ratio": 0.14,
+        "primary_emotion": "anger",
+        "secondary_emotion": "sadness",
+        "valence": -0.7,
+        "arousal": 0.85,
+        "intensity": 0.9,
+
+        "expression_caption": "His face is a battlefield of anger fighting through sadness. Brows are pulled sharply downward and together, creating deep vertical furrows. His eyes are reddened and glistening but not tearing — the effort of not crying is visible in the tension around the orbital region. His mouth opens mid-shot for what is clearly a raised-voice statement, upper lip lifting to expose teeth. By the last frames, his face collapses slightly — the anger deflating, the brows softening upward, the mouth closing into a compressed line of exhaustion.",
+
+        "alternative_captions": {
+          "direct": "Brows pulled down hard. Eyes red and glistening. Mouth opens showing teeth. Then the face softens and the mouth compresses with exhaustion.",
+          "literary": "Fury and grief take turns on his face like wrestlers — the brows driving downward with force, the eyes flooding with a brightness he refuses to release, the mouth tearing open to say something that costs him, before the whole expression subsides into the wreckage of someone who has said too much.",
+          "direction": "Angry attack: brows slam down, V-furrow deep. Eyes wet but NOT crying — fight the tears visibly. Mouth opens on the shout — upper lip raise, teeth exposed. Hold 2 beats. Then collapse: brows release upward, mouth closes to compressed line. Let the exhaustion arrive in the eyes first, then the mouth.",
+          "situational": "As if he is discovering in real time that the anger he thought would protect him is actually just sadness wearing a louder costume."
+        },
+
+        "facial_components": {
+          "eyes": "Reddened, glistening, not quite tearing — visible effort to hold back, tension around orbits",
+          "eyebrows": "Pulled sharply down and together, deep vertical furrows between brows",
+          "mouth": "Opens mid-shot exposing upper teeth, then closes to compressed exhausted line",
+          "jaw": "Drops for vocalization, then clenches on the close",
+          "gaze_direction": "right",
+          "head_pose": "frontal"
+        },
+
+        "facial_attributes": {
+          "apparent_gender": "male",
+          "apparent_age_range": "adult",
+          "glasses": false,
+          "facial_hair": "stubble",
+          "head_covering": "none",
+          "mask": false,
+          "makeup_visible": false,
+          "distinctive_notes": "Pronounced under-eye circles. Hair slightly disheveled."
+        },
+
+        "temporal_change": "peak_then_release",
+        "micro_expression": false,
+
+        "observable_blendshape_hints": {
+          "brow_raise_inner": "none",
+          "brow_raise_outer": "none",
+          "brow_furrow": "strong",
+          "eye_widen": "slight",
+          "eye_squint": "slight",
+          "eye_blink_state": "open",
+          "cheek_raise": "slight",
+          "nose_wrinkle": "medium",
+          "upper_lip_raise": "strong",
+          "lip_corner_pull": "none",
+          "lip_corner_depress": "medium",
+          "lip_tighten": "strong",
+          "lip_part": "strong",
+          "jaw_clench": "medium",
+          "jaw_drop": "medium"
+        },
+
+        "expression_confidence": 0.93
+      },
+
+      "body_analysis": {
+        "body_clearly_visible": true,
+        "shot_frame_of_body": "half_body",
+        "visible_body_parts": ["head", "neck", "shoulders", "upper_arms", "forearms", "hands", "torso"],
+
+        "motion_caption": "He lunges forward from a seated position, torso tipping aggressively over the table. His right hand comes down flat on the table surface — a punctuating slam visible in the shoulder's downward drive. His left hand is clenched in a fist at his side, trembling. After the slam, his torso remains forward, hunched, shoulders rising and falling with heavy breathing. The overall motion pattern is attack-then-hold: an explosive forward burst followed by rigid stillness.",
+
+        "alternative_captions": {
+          "direct": "He leans forward aggressively over the table. His right hand slams flat on the surface. Left hand is clenched at his side. He stays hunched forward, breathing heavily.",
+          "literary": "His body throws itself at the table as though the argument were a physical place he could arrive at faster by leaning — the hand lands like a verdict, and then he stays there, hunched over the evidence of his own intensity, shoulders heaving.",
+          "direction": "Forward lunge from seated. Right hand slam — flat palm, table contact. Left fist clenched at thigh, visible tremor. Hold the forward hunch. Shoulders heave 3 visible breaths. Do not retreat to upright.",
+          "situational": "With the desperation of someone who has run out of words and is now using his body to say what his vocabulary cannot."
+        },
+
+        "action_primary": "gesturing",
+        "action_quality": {
+          "intensity": "high",
+          "tone": "tense",
+          "tempo": "punctuated"
+        },
+        "body_focus": "upper_body",
+
+        "kinematics_hint": {
+          "periodicity": "non_periodic",
+          "symmetry": "bilateral_asymmetric",
+          "duration_class": "peak_then_release",
+          "trajectory": "linear"
+        },
+
+        "upper_body_detail": {
+          "head": "Drops forward following the lunge, then held low over the table",
+          "neck": "Extended forward, cords visible from tension and exertion",
+          "shoulders": "Drive forward and down during slam, then rise and fall with breathing",
+          "arms": "Right: swings forward and down to slam table — full shoulder-driven motion. Left: held at side, clenched.",
+          "hands": "Right: open palm, slams flat on table surface. Left: tight fist at thigh level, visible trembling.",
+          "torso": "Aggressive forward tilt over the table, hunched, rounding at upper back",
+          "posture": "leaning_forward"
+        },
+
+        "gesture_detail": "Right hand performs a table slam — arm swings forward and down from shoulder, palm lands flat on the table surface in a punctuating impact gesture. Left hand is clenched in a fist at thigh level with visible tremor. The slam is emphatic rather than violent — communicative force, not destructive.",
+        "hands_visible": true,
+
+        "interaction": {
+          "count": "dyadic",
+          "contact": "none",
+          "relation": "opposing",
+          "interacts_with_person_index": [1]
+        },
+
+        "motion_confidence": 0.91
+      }
+    },
+
+    {
+      "person_index": 1,
+      "spatial_position": "right",
+
+      "face_analysis": {
+        "face_clearly_visible": true,
+        "face_size_ratio": 0.11,
+        "primary_emotion": "sadness",
+        "secondary_emotion": "fear",
+        "valence": -0.7,
+        "arousal": 0.5,
+        "intensity": 0.6,
+
+        "expression_caption": "Her face carries the weight of absorbing the outburst. Brows are drawn upward at the inner corners in a classic grief configuration. Eyes are wet with visible tears on the lower lash line. Her mouth is closed but trembling, lips pressed together as though holding back both words and sobs. She flinches almost imperceptibly at the table slam moment — a tiny eye-blink and head micro-withdrawal — then returns to the sustained sadness expression.",
+
+        "alternative_captions": {
+          "direct": "Inner brows raised. Eyes wet with tears on the lower lash line. Mouth closed and trembling. A flinch at the slam, then return to the sad expression.",
+          "literary": "She receives his fury the way a shore receives a wave — absorbing it, reshaping around it, her brows lifted in the architecture of sorrow, tears finding their slow way to the edge of falling.",
+          "direction": "Grief face: inner brows up, oblique. Wet eyes — tears pooled but not falling. Lips pressed, trembling. On the slam: micro-flinch — quick blink, tiny head pull-back, 3mm. Then resettle into the grief hold. No sobbing. The restraint IS the performance.",
+          "situational": "As if she has been through this before and knows that his anger is the sound a heart makes when it is breaking, and that knowledge makes her sadder than the anger itself."
+        },
+
+        "facial_components": {
+          "eyes": "Wet, tears pooling at lower lash line, not yet falling",
+          "eyebrows": "Inner corners raised, oblique grief angle",
+          "mouth": "Closed, lips pressed together, visible trembling",
+          "jaw": "Held, not clenched, slight tremor transmitted from lips",
+          "gaze_direction": "left",
+          "head_pose": "frontal"
+        },
+
+        "facial_attributes": {
+          "apparent_gender": "female",
+          "apparent_age_range": "adult",
+          "glasses": false,
+          "facial_hair": "none",
+          "head_covering": "none",
+          "mask": false,
+          "makeup_visible": true,
+          "distinctive_notes": "Slight mascara smudge under left eye. Hair loose around shoulders."
+        },
+
+        "temporal_change": "building",
+        "micro_expression": true,
+
+        "observable_blendshape_hints": {
+          "brow_raise_inner": "medium",
+          "brow_raise_outer": "none",
+          "brow_furrow": "slight",
+          "eye_widen": "none",
+          "eye_squint": "slight",
+          "eye_blink_state": "rapid_blink",
+          "cheek_raise": "slight",
+          "nose_wrinkle": "none",
+          "upper_lip_raise": "none",
+          "lip_corner_pull": "none",
+          "lip_corner_depress": "medium",
+          "lip_tighten": "medium",
+          "lip_part": "none",
+          "jaw_clench": "slight",
+          "jaw_drop": "none"
+        },
+
+        "expression_confidence": 0.89
+      },
+
+      "body_analysis": {
+        "body_clearly_visible": true,
+        "shot_frame_of_body": "half_body",
+        "visible_body_parts": ["head", "neck", "shoulders", "upper_arms", "forearms", "hands", "torso"],
+
+        "motion_caption": "She is seated with her torso pulling gradually backward — a slow withdrawal from the confrontation. Her arms come together across her chest in a self-protective cross, right hand gripping her left upper arm, left hand tucked against her right side. The shoulders are slightly rounded inward, collapsing the chest. At the slam moment, her upper body flinches — a quick micro-retraction of perhaps 2cm — then resettles into the withdrawn posture. Her breathing is visible in the rise and fall of her crossed arms.",
+
+        "alternative_captions": {
+          "direct": "She leans back in her seat. Arms cross over her chest — right hand gripping left arm. She flinches at the slam, then resettles. Shoulders rounded inward.",
+          "literary": "She builds herself a fortress out of her own arms — crossed tightly, hands gripping what they can reach, her body folding inward as though trying to become a smaller target.",
+          "direction": "Slow withdrawal, seated. Arms cross: right hand grips left bicep, left hand tucks to right ribs. Shoulders round in. On the slam: micro-flinch, 2cm retraction, quick. Then hold the crossed-arm position. Visible breathing through the crossed arms rising and falling.",
+          "situational": "With the bodily instinct of someone who knows that defending herself with words will only make this louder, and so defends herself with geometry instead."
+        },
+
+        "action_primary": "sitting",
+        "action_quality": {
+          "intensity": "low",
+          "tone": "tense",
+          "tempo": "sustained"
+        },
+        "body_focus": "posture",
+
+        "kinematics_hint": {
+          "periodicity": "non_periodic",
+          "symmetry": "bilateral_symmetric",
+          "duration_class": "ongoing",
+          "trajectory": "linear"
+        },
+
+        "upper_body_detail": {
+          "head": "Held relatively still, slight withdrawal at the flinch moment",
+          "neck": "Slightly compressed, chin dropping toward chest",
+          "shoulders": "Rounded forward and inward, closing off the chest",
+          "arms": "Crossed over chest — right arm on top, left underneath",
+          "hands": "Right hand gripping left upper arm. Left hand tucked against right ribcage.",
+          "torso": "Leaning back slightly, upper back rounding, closed posture",
+          "posture": "sitting"
+        },
+
+        "gesture_detail": "Arms crossed protectively over chest — right over left. Right hand grips left bicep with visible pressure. Left hand is tucked flat against right ribcage. This is a self-soothing/protective posture, not a communicative gesture. A micro-flinch at the slam moment — 2cm retraction of the entire upper body, quick, then resettle.",
+        "hands_visible": true,
+
+        "interaction": {
+          "count": "dyadic",
+          "contact": "none",
+          "relation": "opposing",
+          "interacts_with_person_index": [0]
+        },
+
+        "motion_confidence": 0.87
+      }
+    }
+  ],
+
+  "interaction": {
+    "count": "dyadic",
+    "contact": "none",
+    "relation": "opposing"
+  },
+
+  "quality_flags": {
+    "face_clearly_visible": true,
+    "body_clearly_visible": true,
+    "motion_blur": false,
+    "occlusion": "none",
+    "lighting": "good",
+    "camera_stable": true,
+    "frame_sampling_ok": true,
+    "vlm_confidence": 0.91
+  },
+
+  "usability_score": {
+    "face": 0.92,
+    "motion": 0.88
+  },
+
+  "exclusion_reason": null,
+
+  "meta": {
+    "vlm_model": "Qwen3-VL-32B-Instruct",
+    "vlm_version": "2026-04",
+    "frames_used": 8,
+    "infer_time_ms": 3500
+  }
+}

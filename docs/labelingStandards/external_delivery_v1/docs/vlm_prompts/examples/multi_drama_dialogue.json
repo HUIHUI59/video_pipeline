@@ -1,0 +1,286 @@
+{
+  "shot_id": "example_multi_drama_008",
+  "source_movie": "Moonlight_2016",
+
+  "shot_context": {
+    "shot_type": "medium close-up",
+    "shot_emotion_summary": "An emotionally asymmetric conversation: one person confesses pain while the other listens with empathic anguish, absorbing sorrow they cannot fix.",
+    "shot_motion_summary": "Person 0 speaks with restrained hand gestures at lap level. Person 1 sits still, leaning slightly forward, hands clasped.",
+    "scene_context": {
+      "visible_setting": "Small diner booth, warm amber overhead light, Formica table between them, nighttime visible through window",
+      "narrative_situation": "A long-overdue conversation between two people reconnecting after years apart",
+      "narrative_confidence": 0.65
+    }
+  },
+
+  "persons": [
+    {
+      "person_index": 0,
+      "spatial_position": "left",
+
+      "face_analysis": {
+        "face_clearly_visible": true,
+        "face_size_ratio": 0.12,
+        "primary_emotion": "sadness",
+        "secondary_emotion": "fear",
+        "valence": -0.6,
+        "arousal": 0.45,
+        "intensity": 0.65,
+
+        "expression_caption": "His face carries the cost of speaking something long held back. In the opening frames, his brows are drawn together at the inner corners and slightly raised — the classic grief-plus-effort configuration. His eyes are damp but not spilling, with a visible glisten under the warm light. His mouth opens and closes with speech, but between sentences it compresses into a tight line, the lower lip pulling inward as though biting back more than he intends to say. Mid-shot, a tremor passes through his chin — a single involuntary ripple that he suppresses by clenching his jaw. By the final frames, his eyes drop downward and the brows soften, as though the act of telling has partially exhausted the grief behind it.",
+
+        "alternative_captions": {
+          "direct": "Inner brows raised and drawn together. Eyes damp, glistening. Mouth opens for speech then compresses between sentences. Chin tremor mid-shot, suppressed by jaw clench. Eyes drop downward at the end.",
+          "literary": "His face is doing the work of translation — converting years of silence into words, and each word costs him visibly. The chin betrays him once, trembling before he catches it with his jaw, and by the end his eyes have retreated downward as though they have shown enough.",
+          "direction": "Grief-effort face: inner brows up and together, asymmetric. Wet eyes — glisten, NOT tears falling. Mouth opens for dialogue, compresses between lines — lower lip tucks in. Mid-shot: single chin tremor, 1 second, then jaw clench to stop it. Final frames: gaze drops, brows soften, exhaustion replaces effort. The key is controlled vulnerability — he is choosing to be open and it is costing him.",
+          "situational": "As if every sentence he speaks is being pulled from a place he sealed shut years ago, and the unsealing hurts more than the memory itself."
+        },
+
+        "facial_components": {
+          "eyes": "Damp, glistening under warm light, not yet tearing, dropping downward in final frames",
+          "eyebrows": "Inner corners raised and drawn together, grief-effort configuration, softening at end",
+          "mouth": "Opens for speech, compresses to tight line between sentences, lower lip pulled inward",
+          "jaw": "Clenches mid-shot to suppress chin tremor, then relaxes partially",
+          "gaze_direction": "right",
+          "head_pose": "frontal"
+        },
+
+        "facial_attributes": {
+          "apparent_gender": "male",
+          "apparent_age_range": "young_adult",
+          "glasses": false,
+          "facial_hair": "stubble",
+          "head_covering": "none",
+          "mask": false,
+          "makeup_visible": false,
+          "distinctive_notes": "Warm amber light emphasizes cheekbone structure. Short-cropped hair."
+        },
+
+        "temporal_change": "peak_then_release",
+        "micro_expression": false,
+
+        "observable_blendshape_hints": {
+          "brow_raise_inner": "medium",
+          "brow_raise_outer": "none",
+          "brow_furrow": "medium",
+          "eye_widen": "none",
+          "eye_squint": "slight",
+          "eye_blink_state": "slow_blink",
+          "cheek_raise": "slight",
+          "nose_wrinkle": "none",
+          "upper_lip_raise": "none",
+          "lip_corner_pull": "none",
+          "lip_corner_depress": "medium",
+          "lip_tighten": "medium",
+          "lip_part": "medium",
+          "jaw_clench": "medium",
+          "jaw_drop": "slight"
+        },
+
+        "expression_confidence": 0.90
+      },
+
+      "body_analysis": {
+        "body_clearly_visible": true,
+        "shot_frame_of_body": "half_body",
+        "visible_body_parts": ["head", "neck", "shoulders", "upper_arms", "forearms", "hands", "torso"],
+
+        "motion_caption": "He is seated with his torso slightly hunched, shoulders rounded inward. While speaking, his right hand lifts from his lap to gesture at table height — small, contained movements, the hand turning palm-up as though offering something invisible. The gestures are halting: the hand rises, pauses, makes a small circling motion as he searches for words, then returns to his lap. His left hand rests on his left thigh, fingers occasionally pressing into the fabric. Between speaking moments, both hands return to his lap and his shoulders drop slightly, as though each sentence requires a small physical recovery.",
+
+        "alternative_captions": {
+          "direct": "He sits hunched. Right hand gestures at table level — small, halting movements, palm-up turns. Left hand rests on thigh, pressing into fabric. Shoulders drop between sentences.",
+          "literary": "His hands are trying to help him speak — rising tentatively, turning palm-up in small offerings, circling as though the right word might be caught from the air, then retreating to the safety of his lap when the sentence ends and the cost of it registers in his dropping shoulders.",
+          "direction": "Seated, hunched posture. Right hand gestures: lift from lap to table height, palm-up turn, small searching circle, return. Keep gestures small — 15cm radius max. Left hand on left thigh, fingers press fabric on emotional peaks. Between sentences: both hands to lap, shoulders drop 1cm. The gestures are fumbling for language, not illustrating it.",
+          "situational": "With the hesitant physicality of someone who has not spoken about this to anyone and is inventing the body language for it as he goes."
+        },
+
+        "action_primary": "gesturing",
+        "action_quality": {
+          "intensity": "low",
+          "tone": "gentle",
+          "tempo": "slow"
+        },
+        "body_focus": "hands",
+
+        "kinematics_hint": {
+          "periodicity": "non_periodic",
+          "symmetry": "bilateral_asymmetric",
+          "duration_class": "intermittent",
+          "trajectory": "curved"
+        },
+
+        "upper_body_detail": {
+          "head": "Slightly bowed, dropping further in final frames as gaze lowers",
+          "neck": "Curved forward following the hunched posture, exposed nape visible",
+          "shoulders": "Rounded inward, dropping slightly between speaking bursts",
+          "arms": "Right: lifts from lap to gesture at table height, then returns. Left: rests on left thigh.",
+          "hands": "Right: performs small searching gestures, palm-up turns, 15cm radius. Left: rests on thigh, fingers press into fabric intermittently.",
+          "torso": "Hunched forward, upper back rounded, leaning toward the table",
+          "posture": "sitting"
+        },
+
+        "gesture_detail": "Right hand performs small, halting gestures at table height — lifts from lap, turns palm-up in an offering motion, makes a small circling search gesture when words stall, then descends to lap. Maximum gesture radius is approximately 15cm. Left hand rests flat on left thigh with fingers pressing into the fabric during emotional peaks. All gestures are self-directed and searching rather than communicative or illustrative.",
+        "hands_visible": true,
+
+        "interaction": {
+          "count": "dyadic",
+          "contact": "none",
+          "relation": "coordinated",
+          "interacts_with_person_index": [1]
+        },
+
+        "motion_confidence": 0.88
+      }
+    },
+
+    {
+      "person_index": 1,
+      "spatial_position": "right",
+
+      "face_analysis": {
+        "face_clearly_visible": true,
+        "face_size_ratio": 0.11,
+        "primary_emotion": "complex",
+        "secondary_emotion": "sadness",
+        "valence": -0.35,
+        "arousal": 0.4,
+        "intensity": 0.55,
+
+        "expression_caption": "His face is a study in active listening that gradually becomes overwhelmed. In the early frames, his expression is open and attentive — brows slightly raised, eyes focused, mouth relaxed and closed. As the other person speaks, the empathy arrives physically: his brows draw together at the center without descending, creating a concerned furrow above the nose. His eyes narrow fractionally — not a squint but an intensification of focus, as though he is trying to see the pain behind the words. The mouth tightens, the corners pulling neither up nor down but simply compressing, holding back a response. By the final frames, his lower eyelids have risen slightly, creating the faintest suggestion of tears that will not be allowed to form. The overall trajectory is from receptive calm to contained emotional resonance.",
+
+        "alternative_captions": {
+          "direct": "Brows slightly raised, then draw together at center. Eyes focused, narrowing fractionally. Mouth tightens, corners compress. Lower eyelids rise slightly at the end.",
+          "literary": "He listens the way a tuning fork resonates — absorbing the frequency of the other man's pain until his own face begins to vibrate with it, the brows drawing together, the eyes intensifying, the mouth sealing itself against words that would interrupt this necessary unburdening.",
+          "direction": "Active listening build. Start: open face, brows up, eyes soft. Progress: central brow furrow WITHOUT descending, eyes narrow 1mm — focus, not squint. Mouth compresses — neutral corners, just tighter. End: lower eyelids rise fractionally, moisture hint. Do NOT cry. Do NOT look away. The restraint is the empathy.",
+          "situational": "As if he is receiving a confession and understands that the most generous thing he can do is hold still and let his face show that it is landing."
+        },
+
+        "facial_components": {
+          "eyes": "Focused, narrowing fractionally with empathic intensity, lower eyelids rising slightly at end",
+          "eyebrows": "Initially slightly raised, then drawing together at center creating concerned furrow",
+          "mouth": "Transitions from relaxed closed to compressed, corners neutral, holding back",
+          "jaw": "Held steady, slight tension building by final frames",
+          "gaze_direction": "left",
+          "head_pose": "frontal"
+        },
+
+        "facial_attributes": {
+          "apparent_gender": "male",
+          "apparent_age_range": "adult",
+          "glasses": false,
+          "facial_hair": "none",
+          "head_covering": "none",
+          "mask": false,
+          "makeup_visible": false,
+          "distinctive_notes": "Smooth skin catching warm amber light. Strong jaw line. Close-cropped hair, slightly longer on top."
+        },
+
+        "temporal_change": "building",
+        "micro_expression": false,
+
+        "observable_blendshape_hints": {
+          "brow_raise_inner": "slight",
+          "brow_raise_outer": "none",
+          "brow_furrow": "medium",
+          "eye_widen": "none",
+          "eye_squint": "slight",
+          "eye_blink_state": "open",
+          "cheek_raise": "slight",
+          "nose_wrinkle": "none",
+          "upper_lip_raise": "none",
+          "lip_corner_pull": "none",
+          "lip_corner_depress": "slight",
+          "lip_tighten": "medium",
+          "lip_part": "none",
+          "jaw_clench": "slight",
+          "jaw_drop": "none"
+        },
+
+        "expression_confidence": 0.87
+      },
+
+      "body_analysis": {
+        "body_clearly_visible": true,
+        "shot_frame_of_body": "half_body",
+        "visible_body_parts": ["head", "neck", "shoulders", "upper_arms", "forearms", "hands", "torso"],
+
+        "motion_caption": "He sits with his torso angled slightly forward toward the speaker, creating an attentive lean. His hands are clasped together on the table surface in front of him — fingers interlaced, thumbs pressing against each other. This clasp tightens perceptibly as the conversation progresses, the knuckles whitening by mid-shot. His shoulders are level and still, though a faint tension builds in the trapezius visible at the neck junction. The only voluntary motion is a single slow nod mid-shot — a small, deliberate downward movement of the head that communicates acknowledgment. His breathing is visible: slow, controlled, the ribcage expanding and contracting at a measured pace.",
+
+        "alternative_captions": {
+          "direct": "He leans forward slightly. Hands clasped on the table, fingers interlaced, grip tightening. One slow nod mid-shot. Shoulders still, tension building in trapezius. Controlled breathing visible.",
+          "literary": "He holds himself together the way his hands hold each other — interlaced, tightening, the knuckles going pale with the effort of staying still while someone he cares about is breaking open in front of him. The single nod he offers is less agreement than witness.",
+          "direction": "Forward lean, 5 degrees. Hands clasped on table — interlaced fingers, thumbs pressing. Tighten the clasp progressively, show whitening knuckles. ONE nod at the emotional peak: slow, 2 seconds, deliberate. Shoulders stay put. Build trapezius tension. Breathe slowly and visibly — 4-second cycles. No other movement. Stillness IS the performance.",
+          "situational": "With the practiced stillness of someone who knows that moving right now would break the spell of honesty the other person has finally found the courage to cast."
+        },
+
+        "action_primary": "sitting",
+        "action_quality": {
+          "intensity": "low",
+          "tone": "gentle",
+          "tempo": "sustained"
+        },
+        "body_focus": "hands",
+
+        "kinematics_hint": {
+          "periodicity": "non_periodic",
+          "symmetry": "bilateral_symmetric",
+          "duration_class": "ongoing",
+          "trajectory": "stationary"
+        },
+
+        "upper_body_detail": {
+          "head": "Angled forward, performs one slow deliberate nod mid-shot",
+          "neck": "Slight forward extension following lean, tension building at trapezius junction",
+          "shoulders": "Level, still, faint tension accumulating in upper trapezius",
+          "arms": "Both forearms resting on table surface, angled inward toward clasped hands",
+          "hands": "Interlaced fingers clasped together on table, thumbs pressing, grip tightening progressively, knuckles whitening",
+          "torso": "Leaning forward approximately five degrees, stable, controlled breathing visible in ribcage",
+          "posture": "sitting"
+        },
+
+        "gesture_detail": "Hands clasped on table surface with fingers fully interlaced and thumbs pressing against each other — a self-containing grip that tightens as emotional content increases, knuckles whitening by mid-shot. One deliberate nod at the emotional peak — slow descent of the head over two seconds, then return. No other voluntary gestures. The clasped hands serve a dual function: anchoring stillness and containing the impulse to reach out.",
+        "hands_visible": true,
+
+        "interaction": {
+          "count": "dyadic",
+          "contact": "none",
+          "relation": "coordinated",
+          "interacts_with_person_index": [0]
+        },
+
+        "motion_confidence": 0.85
+      }
+    }
+  ],
+
+  "interaction": {
+    "count": "dyadic",
+    "contact": "none",
+    "relation": "coordinated"
+  },
+
+  "quality_flags": {
+    "face_clearly_visible": true,
+    "body_clearly_visible": true,
+    "motion_blur": false,
+    "occlusion": "none",
+    "lighting": "good",
+    "camera_stable": true,
+    "frame_sampling_ok": true,
+    "vlm_confidence": 0.89
+  },
+
+  "usability_score": {
+    "face": 0.88,
+    "motion": 0.82
+  },
+
+  "exclusion_reason": null,
+
+  "meta": {
+    "vlm_model": "Qwen3-VL-32B-Instruct",
+    "vlm_version": "2026-04",
+    "frames_used": 8,
+    "infer_time_ms": 3400
+  }
+}

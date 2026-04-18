@@ -102,40 +102,26 @@ def _append_checkpoint(out_root: Path, shot_id: str) -> None:
         f.write(json.dumps({"shot_id": shot_id, "completed_at": time.time()}) + "\n")
 
 
-SYSTEM_PROMPT = (
-    "You are a rigorous video shot annotator. Produce ONE JSON object "
-    "conforming exactly to the provided JSON Schema. Describe only what is "
-    "visible in the frames. Use English. Do not invent camera terms in body/"
-    "action fields — camera only belongs in shot_context.shot_type. If a field "
-    "is not observable, use the 'unknown' value where allowed, or null where "
-    "the schema permits. Never emit empty strings for string-typed fields."
-)
+# SYSTEM_PROMPT 和 user prompt 模板改由 delivery_v1/scripts/build_vlm_prompt.py
+# 在 main() 启动时动态构造（含 taxonomy 67 条 leaves + 30 条 forbidden 镜头术语
+# + 每个 category 2 条 few-shot 示例）。不再在此硬编码，确保始终贴合官方交付规则。
 
 
-def _user_prompt(entry: ManifestEntry, n_frames: int) -> str:
-    lines = [
-        f"Shot ID: {entry.shot_id}",
-        f"Source movie: {entry.source_movie}",
-        f"Shot category (from manifest): {entry.shot_category}",
-        f"Num people (from manifest, trust this): {entry.num_people}",
-    ]
-    # Stage 4 v2 additional hints（v1 旧 manifest 没有这些字段）
-    if entry.num_faces is not None:
-        lines.append(
-            f"Num faces visible (trust this, order persons by face size): "
-            f"{entry.num_faces}")
-    if entry.largest_face_ratio is not None:
-        lines.append(
-            f"Largest face occupies approximately "
-            f"{entry.largest_face_ratio*100:.1f}% of the frame")
-    lines += [
-        f"Duration: {entry.duration_sec:.2f}s  "
-        f"Resolution: {entry.width}x{entry.height}  FPS: {entry.fps}",
-        f"Frames sampled: {n_frames} (uniformly across the shot)",
-        "",
-        "Produce the ShotLabel JSON.",
-    ]
-    return "\n".join(lines)
+def _category_for_prompt(shot_category: str) -> str:
+    """官方 prompt 只有 single/dominant/multi 三类。wide 用 multi 的 prompt 兜底，
+    landscape 在 upload 已被过滤不会到这里。"""
+    if shot_category in ("single", "dominant", "multi"):
+        return shot_category
+    return "multi"
+
+
+def _fill_user_template(template: str, entry: ManifestEntry) -> str:
+    """build_user_prompt() 返回的模板含 few-shot 示例 JSON（有大量 {} 括号），
+    用 str.format() 会炸。直接 str.replace() 替换三个占位符最安全。"""
+    return (template
+            .replace("{shot_id}",      str(entry.shot_id))
+            .replace("{source_movie}", str(entry.source_movie))
+            .replace("{num_people}",   str(entry.num_people)))
 
 
 def main() -> int:
@@ -203,6 +189,53 @@ def main() -> int:
         log.info("[DRY RUN] 跳过模型加载。")
         return 0
 
+    # ── 集成 external_delivery_v1 ─────────────────────────────────
+    # 依赖 upload.py 把 docs/labelingStandards/external_delivery_v1/ rsync 到
+    # <workspace>/delivery_v1/。scripts/*.py 动态 import；docs/*.yaml 按路径加载。
+    delivery_root = workspace / "delivery_v1"
+    tax_path = delivery_root / "docs" / "motion_taxonomy.yaml"
+    syn_path = delivery_root / "docs" / "motion_synonyms.yaml"
+    exa_dir  = delivery_root / "docs" / "vlm_prompts" / "examples"
+    scripts_dir = delivery_root / "scripts"
+
+    if not (tax_path.exists() and syn_path.exists() and scripts_dir.exists()):
+        log.error(
+            f"delivery_v1 bundle 不完整: "
+            f"{delivery_root}/{{docs,scripts}}。请在本地重新跑 01_push.sh。")
+        return 4
+
+    sys.path.insert(0, str(scripts_dir))
+    try:
+        from build_vlm_prompt import (
+            load_taxonomy_leaves, load_forbidden_terms,
+            load_examples, build_system_prompt, build_user_prompt,
+        )
+        from normalize_tags import TagNormalizer
+        from validate_body_analysis import (
+            ShotValidator, TaxonomyLoader, SynonymLoader,
+        )
+    except ImportError as e:
+        log.error(f"delivery_v1 scripts import 失败: {e}")
+        return 4
+
+    taxonomy_leaves = load_taxonomy_leaves(tax_path)
+    forbidden_terms = load_forbidden_terms(tax_path)
+    n_leaves_total = sum(len(v) for v in taxonomy_leaves.values())
+    log.info(f"Loaded taxonomy: {len(taxonomy_leaves)} categories, "
+             f"{n_leaves_total} leaves; {len(forbidden_terms)} forbidden terms")
+
+    system_prompt = build_system_prompt(taxonomy_leaves, forbidden_terms)
+
+    user_templates: dict[str, str] = {}
+    for cat in ("single", "dominant", "multi"):
+        examples = load_examples(exa_dir, cat)
+        user_templates[cat] = build_user_prompt(cat, examples)
+        log.info(f"Loaded few-shot: {cat}={len(examples)}")
+
+    normalizer = TagNormalizer(syn_path, tax_path)
+    validator  = ShotValidator(TaxonomyLoader(tax_path), SynonymLoader(syn_path))
+    log.info("delivery_v1 集成就绪（system_prompt + normalize + validate）")
+
     try:
         from vllm import LLM, SamplingParams
         from vllm.sampling_params import GuidedDecodingParams
@@ -253,11 +286,15 @@ def main() -> int:
             log.warning(f"[skip] 采帧失败 {e.shot_id}: {ex}")
             continue
 
+        # 构造 prompt：system 通用 + user 按 category 取模板再填 shot 信息
+        cat_key = _category_for_prompt(e.shot_category)
+        user_text = _fill_user_template(user_templates[cat_key], e)
+
         messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user",   "content": [
                 *[{"type": "image", "image": im} for im in frames],
-                {"type": "text", "text": _user_prompt(e, n_frames)},
+                {"type": "text", "text": user_text},
             ]},
         ]
 
@@ -271,22 +308,75 @@ def main() -> int:
             bad += 1
             continue
 
-        try:
-            obj = json.loads(raw)
-            obj.setdefault("meta", {})
-            obj["meta"].setdefault("vlm_model",   model_name)
-            obj["meta"].setdefault("vlm_version", "2026-04")
-            obj["meta"]["frames_used"]   = n_frames
-            obj["meta"]["infer_time_ms"] = infer_ms
-            ShotLabel.model_validate(obj)
-        except Exception as ex:
-            log.error(f"[ERR] 校验失败 {e.shot_id}: {ex}")
-            bad += 1
+        # 失败保存助手
+        def _save_failed(slug: str, raw_text: str, reason: str,
+                         errors: list | None = None,
+                         warnings: list | None = None) -> None:
             fail_dir = out_root / "_failed"
             fail_dir.mkdir(exist_ok=True)
-            (fail_dir / f"{e.shot_id.replace('/', '__')}.raw.txt").write_text(raw)
+            (fail_dir / f"{slug}.raw.txt").write_text(raw_text, encoding="utf-8")
+            (fail_dir / f"{slug}.errors.json").write_text(
+                json.dumps({"reason": reason,
+                            "errors":   errors or [],
+                            "warnings": warnings or []},
+                           ensure_ascii=False, indent=2),
+                encoding="utf-8")
+
+        slug = e.shot_id.replace("/", "__")
+
+        # 1) JSON 解析
+        try:
+            obj = json.loads(raw)
+        except Exception as ex:
+            log.error(f"[ERR parse] {e.shot_id}: {ex}")
+            _save_failed(slug, raw, f"json_parse: {ex}")
+            bad += 1
             continue
 
+        # 2) normalize_tags（动词归一、同义词、forbidden 镜头术语、intensity/tone 归轴）
+        try:
+            normalized = normalizer.normalize_shot(obj)
+            obj = normalized[0] if isinstance(normalized, tuple) else normalized
+        except Exception as ex:
+            log.warning(f"[warn normalize] {e.shot_id}: {ex}（继续用原始 obj）")
+
+        # 3) 注入 meta
+        obj.setdefault("meta", {})
+        obj["meta"].setdefault("vlm_model",   model_name)
+        obj["meta"].setdefault("vlm_version", "2026-04")
+        obj["meta"]["frames_used"]   = n_frames
+        obj["meta"]["infer_time_ms"] = infer_ms
+
+        # 4) Pydantic 结构校验
+        try:
+            ShotLabel.model_validate(obj)
+        except Exception as ex:
+            log.error(f"[ERR schema] {e.shot_id}: {ex}")
+            _save_failed(slug, raw, f"pydantic: {ex}")
+            bad += 1
+            continue
+
+        # 5) 业务校验（14 项 ShotValidator）— errors=0 才算合格
+        try:
+            errors, warnings, _infos = validator.validate(obj)
+        except Exception as ex:
+            log.error(f"[ERR validator] {e.shot_id}: {ex}")
+            _save_failed(slug, raw, f"validator_crash: {ex}")
+            bad += 1
+            continue
+
+        if errors:
+            log.error(f"[ERR validate] {e.shot_id}: {len(errors)} errors "
+                      f"({len(warnings)} warnings)")
+            _save_failed(slug, raw, "business_validation_failed",
+                         errors=errors, warnings=warnings)
+            bad += 1
+            continue
+
+        if warnings:
+            log.info(f"[warn] {e.shot_id}: {len(warnings)} warnings")
+
+        # 6) 合格，落盘 + checkpoint
         out_file = out_root / e.source_movie / f"{Path(e.shot_id).name}.json"
         out_file.parent.mkdir(parents=True, exist_ok=True)
         out_file.write_text(json.dumps(obj, ensure_ascii=False, indent=2))

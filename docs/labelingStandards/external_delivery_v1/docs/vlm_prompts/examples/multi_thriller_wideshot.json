@@ -1,0 +1,286 @@
+{
+  "shot_id": "example_multi_thriller_007",
+  "source_movie": "No_Country_for_Old_Men_2007",
+
+  "shot_context": {
+    "shot_type": "medium",
+    "shot_emotion_summary": "A lopsided standoff: one figure radiates unnerving calm, the other barely contains rising terror. The silence itself is threatening.",
+    "shot_motion_summary": "Person 0 stands motionless, weight centered, hands at sides. Person 1 takes a slow half-step backward, one hand rising defensively.",
+    "scene_context": {
+      "visible_setting": "Rural gas station office interior, harsh overhead fluorescent tube, cluttered counter, darkness visible through a window behind",
+      "narrative_situation": "An encounter where one party holds lethal advantage over an unsuspecting civilian",
+      "narrative_confidence": 0.7
+    }
+  },
+
+  "persons": [
+    {
+      "person_index": 0,
+      "spatial_position": "left",
+
+      "face_analysis": {
+        "face_clearly_visible": true,
+        "face_size_ratio": 0.09,
+        "primary_emotion": "neutral",
+        "secondary_emotion": "contempt",
+        "valence": -0.15,
+        "arousal": 0.2,
+        "intensity": 0.25,
+
+        "expression_caption": "His face is unsettlingly still throughout the shot. The eyes are open at a natural width but carry a fixed, unblinking quality — the gaze is locked forward without wavering. His brows rest flat, producing no readable furrow or lift. The mouth is closed, lips meeting in a thin neutral line with neither tension nor relaxation. In the final frames, the faintest asymmetric curl appears at the right corner of his mouth — barely a millimeter of lift — hinting at amusement that never fully arrives. The overall impression is of a person for whom this moment holds no emotional weight.",
+
+        "alternative_captions": {
+          "direct": "Face still. Eyes open, unblinking, locked forward. Brows flat. Mouth a thin neutral line. A faint right-corner lift in the last frames.",
+          "literary": "His face is a shut window — nothing enters, nothing leaves. Only at the end does the faintest flicker cross his mouth, less a smile than the memory of one, as though amusement and menace share the same muscles and he has not decided which to use.",
+          "direction": "Dead neutral hold for 80% of the shot. No blinks. No brow movement. Mouth closed, thin line. In the final two beats, right lip corner lifts 1mm — asymmetric, ambiguous. Do not commit to a smile. The audience should be unsure whether they saw it.",
+          "situational": "With the absolute composure of someone who has already decided the outcome of this encounter and is merely observing the other person discover it."
+        },
+
+        "facial_components": {
+          "eyes": "Open at natural width, unblinking, fixed forward with predatory steadiness",
+          "eyebrows": "Flat, neutral position, no movement throughout",
+          "mouth": "Closed, thin neutral line, faintest right-corner lift in final frames",
+          "jaw": "Relaxed, no clench, no visible tension",
+          "gaze_direction": "right",
+          "head_pose": "frontal"
+        },
+
+        "facial_attributes": {
+          "apparent_gender": "male",
+          "apparent_age_range": "adult",
+          "glasses": false,
+          "facial_hair": "none",
+          "head_covering": "none",
+          "mask": false,
+          "makeup_visible": false,
+          "distinctive_notes": "Dark bowl-cut hairstyle framing the face. Deep-set eyes with prominent brow ridge."
+        },
+
+        "temporal_change": "static",
+        "micro_expression": true,
+
+        "observable_blendshape_hints": {
+          "brow_raise_inner": "none",
+          "brow_raise_outer": "none",
+          "brow_furrow": "none",
+          "eye_widen": "none",
+          "eye_squint": "none",
+          "eye_blink_state": "open",
+          "cheek_raise": "none",
+          "nose_wrinkle": "none",
+          "upper_lip_raise": "none",
+          "lip_corner_pull": "slight",
+          "lip_corner_depress": "none",
+          "lip_tighten": "slight",
+          "lip_part": "none",
+          "jaw_clench": "none",
+          "jaw_drop": "none"
+        },
+
+        "expression_confidence": 0.88
+      },
+
+      "body_analysis": {
+        "body_clearly_visible": true,
+        "shot_frame_of_body": "three_quarter",
+        "visible_body_parts": ["head", "neck", "shoulders", "upper_arms", "forearms", "hands", "torso", "hips", "thighs"],
+
+        "motion_caption": "He stands completely still with his weight evenly distributed on both feet. His torso is upright and squared to the other person, shoulders level and relaxed rather than tensed. Both arms hang loosely at his sides, hands open with fingers slightly curled in a natural resting position. There is no fidgeting, no weight shifting, no adjustment of any kind across the entire shot. His right hand holds a cylindrical object at thigh level, grip relaxed and low. The stillness is deliberate and total — an absence of motion that reads as dominance rather than passivity.",
+
+        "alternative_captions": {
+          "direct": "He stands motionless, weight even, torso upright. Both arms hang at his sides. Right hand holds an object at thigh level. No movement for the entire shot.",
+          "literary": "He occupies the space the way a stone occupies a riverbed — without apology, without effort, letting everything else move around him. His stillness is the loudest thing in the room.",
+          "direction": "Total stillness. Weight centered, feet shoulder-width. Arms dead-hang. Right hand holds prop at thigh — relaxed grip, no white knuckles. Zero fidgeting. Zero sway. The body is a monument. Let the other actor's motion create the scene's energy.",
+          "situational": "With the physical patience of a predator that does not need to chase because it knows the prey has nowhere to go."
+        },
+
+        "action_primary": "standing",
+        "action_quality": {
+          "intensity": "low",
+          "tone": "controlled",
+          "tempo": "sustained"
+        },
+        "body_focus": "posture",
+
+        "kinematics_hint": {
+          "periodicity": "non_periodic",
+          "symmetry": "bilateral_asymmetric",
+          "duration_class": "ongoing",
+          "trajectory": "stationary"
+        },
+
+        "upper_body_detail": {
+          "head": "Level, no tilt, no turn — fixed forward orientation",
+          "neck": "Relaxed, no visible tension or strain, natural alignment",
+          "shoulders": "Level and relaxed, square to the other person, no elevation",
+          "arms": "Both hanging loosely at sides. Right arm slightly forward due to held object.",
+          "hands": "Right: relaxed grip on cylindrical object at thigh level. Left: open, fingers slightly curled in natural rest position.",
+          "torso": "Upright, square, stable — no lean in any direction",
+          "posture": "standing"
+        },
+
+        "gesture_detail": "No communicative gestures. Right hand holds a cylindrical object at thigh level with a relaxed, low grip — no tension visible in the forearm or wrist. Left hand hangs in a natural resting position with fingers slightly curled. The absence of gesture is itself communicative — an expression of total control.",
+        "hands_visible": true,
+
+        "interaction": {
+          "count": "dyadic",
+          "contact": "none",
+          "relation": "opposing",
+          "interacts_with_person_index": [1]
+        },
+
+        "motion_confidence": 0.90
+      }
+    },
+
+    {
+      "person_index": 1,
+      "spatial_position": "right",
+
+      "face_analysis": {
+        "face_clearly_visible": true,
+        "face_size_ratio": 0.08,
+        "primary_emotion": "fear",
+        "secondary_emotion": "surprise",
+        "valence": -0.65,
+        "arousal": 0.75,
+        "intensity": 0.7,
+
+        "expression_caption": "His face transitions from confused politeness to dawning fear across the shot. In the opening frames, his brows are slightly raised in a conversational expression, mouth partly open as though about to speak. By mid-shot, the brows climb higher and pull apart, the eyes widening as the social smile drains from his mouth. His lips part further but no words come — the jaw drops incrementally. In the final frames, the fear configuration is established: brows high and curved, eyes wide with visible sclera below the iris, mouth open in a slack rectangle. A swallow is visible in the throat — the Adam's apple bobbing once.",
+
+        "alternative_captions": {
+          "direct": "Brows rise from polite to alarmed. Eyes widen progressively. Social smile vanishes. Mouth opens slack. A visible swallow in the final frames.",
+          "literary": "Comprehension arrives on his face in stages — first the brows lift as though asking a question, then the eyes open wider than questions allow, and finally the mouth abandons speech entirely, hanging open on the silence of a man who has just understood something he cannot un-understand.",
+          "direction": "Three-beat fear build. Beat 1: polite brows, half-smile, conversational. Beat 2: smile drops, brows climb, eyes open — the moment of recognition. Beat 3: full fear — brows high and curved, sclera visible, mouth slack. Add one visible swallow at the end. The transition from polite to terrified should take the full shot duration.",
+          "situational": "As if he walked into a hardware store and is now realizing, one detail at a time, that he has walked into something else entirely."
+        },
+
+        "facial_components": {
+          "eyes": "Progressively widening, sclera visible below iris by final frames, moisture building",
+          "eyebrows": "Rising from conversational raise to high curved alarm position",
+          "mouth": "Transitions from half-open speaking position to slack open rectangle",
+          "jaw": "Drops incrementally, held open in final frames",
+          "gaze_direction": "left",
+          "head_pose": "frontal"
+        },
+
+        "facial_attributes": {
+          "apparent_gender": "male",
+          "apparent_age_range": "middle_aged",
+          "glasses": false,
+          "facial_hair": "none",
+          "head_covering": "none",
+          "mask": false,
+          "makeup_visible": false,
+          "distinctive_notes": "Weathered skin, sun-creased forehead. Receding hairline. Collar of a work shirt visible."
+        },
+
+        "temporal_change": "building",
+        "micro_expression": false,
+
+        "observable_blendshape_hints": {
+          "brow_raise_inner": "strong",
+          "brow_raise_outer": "medium",
+          "brow_furrow": "slight",
+          "eye_widen": "strong",
+          "eye_squint": "none",
+          "eye_blink_state": "open",
+          "cheek_raise": "none",
+          "nose_wrinkle": "none",
+          "upper_lip_raise": "slight",
+          "lip_corner_pull": "none",
+          "lip_corner_depress": "slight",
+          "lip_tighten": "none",
+          "lip_part": "strong",
+          "jaw_clench": "none",
+          "jaw_drop": "medium"
+        },
+
+        "expression_confidence": 0.85
+      },
+
+      "body_analysis": {
+        "body_clearly_visible": true,
+        "shot_frame_of_body": "three_quarter",
+        "visible_body_parts": ["head", "neck", "shoulders", "upper_arms", "forearms", "hands", "torso", "hips", "thighs"],
+
+        "motion_caption": "He takes a single slow half-step backward with his right foot, weight transferring unevenly to the rear. His torso tilts back slightly from the hips — perhaps five degrees — creating distance without turning away. His left hand rises from the counter surface to chest height, palm outward in an instinctive stop-or-calm gesture, fingers slightly spread. His right hand remains on the counter edge, gripping it, knuckles whitening. The shoulders are beginning to hunch upward, the neck shortening as the defensive posture sets in. The overall motion is that of someone who wants to flee but has not yet given himself permission.",
+
+        "alternative_captions": {
+          "direct": "He steps back with his right foot. Left hand rises palm-out to chest height. Right hand grips the counter. Shoulders begin to hunch.",
+          "literary": "His body begins its retreat before his mind authorizes it — one foot sliding backward, a hand rising as though it could hold back what is coming, the other hand gripping the counter like the last solid thing in a tilting world.",
+          "direction": "One half-step back, right foot. Uneven weight transfer — this is not a balanced move. Left hand rises to chest height, palm out, fingers spread — instinctive, not deliberate. Right hand grips counter edge — show white knuckles. Begin shoulder hunch. Do NOT turn away. The fear wants to run but the body is still negotiating.",
+          "situational": "With the halting uncertainty of a man who has just heard a sound in the dark and is deciding whether to investigate or lock the door."
+        },
+
+        "action_primary": "stepping",
+        "action_quality": {
+          "intensity": "mid",
+          "tone": "tense",
+          "tempo": "slow"
+        },
+        "body_focus": "upper_body",
+
+        "kinematics_hint": {
+          "periodicity": "non_periodic",
+          "symmetry": "bilateral_asymmetric",
+          "duration_class": "transitional",
+          "trajectory": "linear"
+        },
+
+        "upper_body_detail": {
+          "head": "Pulling back slightly, chin lifting as torso tilts away",
+          "neck": "Shortening as shoulders begin to hunch upward, Adam's apple visible bobbing",
+          "shoulders": "Beginning to rise toward ears — early defensive hunch, not yet fully committed",
+          "arms": "Left: rising from counter to chest height, palm outward. Right: extended downward, gripping counter edge.",
+          "hands": "Left: open, palm out at chest height, fingers slightly spread in stop gesture. Right: closed grip on counter edge, knuckles whitening.",
+          "torso": "Tilting backward approximately five degrees from the hips, creating distance",
+          "posture": "leaning_back"
+        },
+
+        "gesture_detail": "Left hand rises to chest height with palm facing outward and fingers slightly spread — an instinctive calming or stop gesture, not a deliberate communicative act. Right hand grips the counter edge with whitening knuckles — an anchoring grip that suggests the body is preparing for either flight or the need to steady itself. The two hands tell different stories: one negotiates, the other prepares.",
+        "hands_visible": true,
+
+        "interaction": {
+          "count": "dyadic",
+          "contact": "none",
+          "relation": "opposing",
+          "interacts_with_person_index": [0]
+        },
+
+        "motion_confidence": 0.86
+      }
+    }
+  ],
+
+  "interaction": {
+    "count": "dyadic",
+    "contact": "none",
+    "relation": "opposing"
+  },
+
+  "quality_flags": {
+    "face_clearly_visible": true,
+    "body_clearly_visible": true,
+    "motion_blur": false,
+    "occlusion": "none",
+    "lighting": "good",
+    "camera_stable": true,
+    "frame_sampling_ok": true,
+    "vlm_confidence": 0.87
+  },
+
+  "usability_score": {
+    "face": 0.85,
+    "motion": 0.83
+  },
+
+  "exclusion_reason": null,
+
+  "meta": {
+    "vlm_model": "Qwen3-VL-32B-Instruct",
+    "vlm_version": "2026-04",
+    "frames_used": 8,
+    "infer_time_ms": 3200
+  }
+}

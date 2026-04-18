@@ -1,0 +1,169 @@
+{
+  "shot_id": "example_single_comedy_003",
+  "source_movie": "The_Grand_Budapest_Hotel_2014",
+
+  "shot_context": {
+    "shot_type": "medium",
+    "shot_emotion_summary": "Exaggerated indignation giving way to theatrical self-pity — comedic timing with a pause before the punchline reaction.",
+    "shot_motion_summary": "Animated upper-body reaction: arms spread wide, then clasped dramatically to chest, followed by a deliberate slump.",
+    "scene_context": {
+      "visible_setting": "Ornate hotel lobby, pink and lavender wallpaper, art deco fixtures, warm lighting",
+      "narrative_situation": "A concierge receives an absurd complaint and responds with theatrical outrage",
+      "narrative_confidence": 0.6
+    }
+  },
+
+  "persons": [
+    {
+      "person_index": 0,
+      "spatial_position": "center",
+
+      "face_analysis": {
+        "face_clearly_visible": true,
+        "face_size_ratio": 0.12,
+
+        "primary_emotion": "surprise",
+        "secondary_emotion": "contempt",
+        "valence": -0.1,
+        "arousal": 0.7,
+        "intensity": 0.8,
+
+        "expression_caption": "An exaggerated performance of shock. His eyebrows shoot upward with theatrical amplitude, mouth drops open in an O shape that is too round and too held to be genuine surprise. He maintains this cartoonish expression for a beat too long — the comedic timing lives in the hold. Then his brows descend sharply, eyes narrow with exaggerated suspicion, and his mouth purses into a tight disapproving circle. The transition is abrupt and deliberate, each expression snapping into place like costume changes.",
+
+        "alternative_captions": {
+          "direct": "His eyebrows shoot up and his mouth drops into an O. He holds the expression. Then his brows drop, eyes narrow, and his mouth purses tightly.",
+          "literary": "His face becomes a silent film — each expression arriving fully formed and held one beat past credibility, the surprise so round it could be stamped on a coin, the disapproval that replaces it equally precise and equally performed.",
+          "direction": "Big surprise: brows maximum height, mouth O-shape, hold 2 full beats — it must read as deliberate overacting. Snap transition: brows slam down, eyes narrow to slits, lips purse. No in-between. The comedy is in the abruptness of the switch.",
+          "situational": "As if performing outrage for an audience of one, knowing full well that the person watching can see through it, and not caring in the slightest."
+        },
+
+        "facial_components": {
+          "eyes": "First phase: wide open, whites visible all around. Second phase: narrowed to near-slits with suspicion.",
+          "eyebrows": "First phase: raised to maximum height, forehead deeply lined. Second phase: pulled down sharply, creating a V furrow.",
+          "mouth": "First phase: dropped open in a theatrical O shape. Second phase: pursed into a tight circle of disapproval.",
+          "jaw": "First phase: dropped fully. Second phase: raised and pushed forward slightly.",
+          "gaze_direction": "camera",
+          "head_pose": "frontal"
+        },
+
+        "facial_attributes": {
+          "apparent_gender": "male",
+          "apparent_age_range": "adult",
+          "glasses": false,
+          "facial_hair": "mustache",
+          "head_covering": "none",
+          "mask": false,
+          "makeup_visible": true,
+          "distinctive_notes": "Thin pencil mustache. Slicked-back dark hair. Period costume with high collar."
+        },
+
+        "temporal_change": "transition",
+        "micro_expression": false,
+
+        "observable_blendshape_hints": {
+          "brow_raise_inner": "strong",
+          "brow_raise_outer": "strong",
+          "brow_furrow": "none",
+          "eye_widen": "strong",
+          "eye_squint": "none",
+          "eye_blink_state": "open",
+          "cheek_raise": "none",
+          "nose_wrinkle": "none",
+          "upper_lip_raise": "none",
+          "lip_corner_pull": "none",
+          "lip_corner_depress": "none",
+          "lip_tighten": "none",
+          "lip_part": "strong",
+          "jaw_clench": "none",
+          "jaw_drop": "strong"
+        },
+
+        "expression_confidence": 0.88
+      },
+
+      "body_analysis": {
+        "body_clearly_visible": true,
+
+        "shot_frame_of_body": "three_quarter",
+        "visible_body_parts": ["head", "neck", "shoulders", "upper_arms", "forearms", "hands", "torso", "hips"],
+
+        "motion_caption": "A three-phase theatrical body performance synchronized with the facial acting. Phase 1: Both arms fly outward from the body to full extension, palms upward in a gesture of bewildered affront — the motion is quick and exaggerated. His torso leans backward slightly as if physically pushed by the absurdity. Phase 2: A held moment of maximum spread, shoulders high and locked. Phase 3: Both hands snap inward to clasp over his chest, fingers interlaced, as his torso folds forward into a deliberately exaggerated slump of theatrical self-pity. The shoulders round forward conspicuously.",
+
+        "alternative_captions": {
+          "direct": "Both arms fly outward, palms up. He holds the spread pose. Then he clasps both hands to his chest and slumps forward.",
+          "literary": "His body opens like a book of grievances — arms flung wide to the margins — before snapping shut, hands clutched to his heart as though it might escape, folding inward on the axis of his own magnificent offense.",
+          "direction": "Arms out, palms up, full extension — fast, under 0.5s. Lean back. Hold 2 beats. Snap: hands together at chest, fingers interlaced, slump forward. Exaggerate the shoulder rounding. This is physical comedy — every motion should read from the back row.",
+          "situational": "With the bodily rhetoric of a man who has elevated complaining to a performing art and is currently delivering his magnum opus."
+        },
+
+        "action_primary": "gesturing",
+        "action_quality": {
+          "intensity": "high",
+          "tone": "controlled",
+          "tempo": "punctuated"
+        },
+        "body_focus": "gesture",
+
+        "kinematics_hint": {
+          "periodicity": "non_periodic",
+          "symmetry": "bilateral_symmetric",
+          "duration_class": "peak_then_release",
+          "trajectory": "arc"
+        },
+
+        "upper_body_detail": {
+          "head": "Tilts back slightly during arms-spread phase, then drops forward during slump phase",
+          "neck": "Extended backward in phase 1, compressed forward in phase 3",
+          "shoulders": "Rise and spread wide in phase 1, held high in phase 2, round dramatically forward in phase 3",
+          "arms": "Phase 1: fly outward to full horizontal extension, elbows straight. Phase 3: snap inward, elbows bent, hands clasped at chest.",
+          "hands": "Phase 1: open, palms upward in 'why' gesture. Phase 3: interlaced at chest center, gripping tightly.",
+          "torso": "Phase 1: slight backward lean. Phase 3: forward fold, rounding at mid-back.",
+          "posture": "standing"
+        },
+
+        "gesture_detail": "Both arms extend outward horizontally with palms facing upward in an exaggerated 'can you believe this' gesture. The spread is wide — arms nearly 180 degrees. After the hold, both hands snap inward and interlock over the sternum in a clasping self-comfort gesture. The entire sequence is performed with theatrical precision and deliberate overstatement.",
+        "hands_visible": true,
+
+        "interaction": {
+          "count": "solo",
+          "contact": "none",
+          "relation": "parallel",
+          "interacts_with_person_index": []
+        },
+
+        "motion_confidence": 0.93
+      }
+    }
+  ],
+
+  "interaction": {
+    "count": "solo",
+    "contact": "none",
+    "relation": "parallel"
+  },
+
+  "quality_flags": {
+    "face_clearly_visible": true,
+    "body_clearly_visible": true,
+    "motion_blur": false,
+    "occlusion": "none",
+    "lighting": "good",
+    "camera_stable": true,
+    "frame_sampling_ok": true,
+    "vlm_confidence": 0.89
+  },
+
+  "usability_score": {
+    "face": 0.88,
+    "motion": 0.92
+  },
+
+  "exclusion_reason": null,
+
+  "meta": {
+    "vlm_model": "Qwen3-VL-32B-Instruct",
+    "vlm_version": "2026-04",
+    "frames_used": 8,
+    "infer_time_ms": 2200
+  }
+}

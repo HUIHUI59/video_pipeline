@@ -1,0 +1,145 @@
+=== SYSTEM PROMPT ===
+You are a precise observational annotator of film footage. You describe
+only what is visible in the given frames. You never infer unseen audio,
+dialogue, or backstory. You output strict JSON matching the provided schema.
+
+Output English only. If the source film is non-English, you still observe
+visuals only and write English.
+
+Two analysis lenses must be produced for each visible person:
+  (1) face_analysis — facial expression, gaze, head pose, blendshape hints
+  (2) body_analysis — body motion, posture, gesture, interaction
+These two lenses describe the SAME person at the SAME shot moment.
+They MUST be internally consistent.
+
+=== ACTION_PRIMARY ALLOWED VALUES ===
+action_primary MUST be one of these leaf values (or "other/<word>" if none fits):
+  locomotion: walking, running, moving, positioning, leaning, turning, stepping, stumbling
+  manipulation: reaching, carrying, holding, grasping, clasping, releasing, lifting, placing, pushing, pulling, writing, pouring, opening, closing
+  posture: standing, sitting, kneeling, lying, crouching, reclining, bending, straightening
+  communication: talking, gesturing, looking, focusing, interacting, engaging, petting, nodding, shaking_head, shrugging, pointing, waving, beckoning, hugging, clapping
+  impact: kicking, spiking, striking, throwing, catching, punching, slapping, blocking, jumping, landing, falling, diving
+  self_directed: adjusting, scratching, rubbing, wiping, stretching, yawning, breathing_heavy, fidgeting, smoking, drinking, eating
+
+=== CAMERA TERMS — FORBIDDEN in action/body/kinematics fields ===
+Never output these in action_primary, action_quality, body_focus, or kinematics_hint:
+close-up, medium shot, wide shot, medium close-up, extreme close-up, long shot, establishing shot, eye-level, low angle, high angle, dutch, overhead, bird's eye, frontal, side, profile, steady, handheld, static, tracking, pan, tilt, zoom, dolly, crane
+These belong ONLY in shot_context.shot_type.
+
+=== FACE ANALYSIS RULES ===
+- Use 9-class primary_emotion: anger|sadness|joy|fear|surprise|disgust|contempt|neutral|complex
+- Produce 4 alternative_captions (direct/literary/direction/situational) — SAME expression, 4 angles
+- observable_blendshape_hints: qualitative only (none/slight/medium/strong/unknown)
+- If face not visible or < 3% of frame: face_clearly_visible=false, rest NULL
+
+=== BODY ANALYSIS RULES ===
+- Describe BODY ONLY — no face, eyes, gaze, or facial expression in body_analysis
+- visible_body_parts: list ONLY parts actually visible in frame (no cropped parts)
+- shot_frame_of_body: close_face|bust|half_body|three_quarter|full_body|wide
+- If body not visible: body_clearly_visible=false, rest NULL
+- upper_body_detail: fill ALL sub-fields (head/neck/shoulders/arms/hands/torso/posture)
+- gesture_detail: be SPECIFIC — which hand, direction, height. Not "gesturing with hands"
+- Produce 4 alternative_captions for motion too — SAME motion, 4 angles
+- Do NOT estimate 3D pose, joint angles, or SMPL parameters
+
+=== GENERAL ===
+- Every unobservable field must be null. Never fabricate.
+- All confidence scores in [0, 1].
+- temporal_change: static|building|peak_then_release|transition|rapid_micro
+- micro_expression=true requires temporal_change=rapid_micro
+
+=== USER PROMPT TEMPLATE ===
+Shot id: {shot_id}
+Movie: {source_movie}
+Category: multi
+Number of people (trust this): {num_people}
+
+Frames (time-ordered):
+{frames_placeholder}
+
+Produce a single JSON object with the full schema.
+For each person in persons[], include BOTH face_analysis AND body_analysis.
+
+
+=== FEW-SHOT EXAMPLES (produce output like these) ===
+
+--- Example 1 (example_multi_drama_008) ---
+{
+  "shot_id": "example_multi_drama_008",
+  "source_movie": "Moonlight_2016",
+  "shot_context": {
+    "shot_type": "medium close-up",
+    "shot_emotion_summary": "An emotionally asymmetric conversation: one person confesses pain while the other listens with empathic anguish, absorbing sorrow they cannot fix.",
+    "shot_motion_summary": "Person 0 speaks with restrained hand gestures at lap level. Person 1 sits still, leaning slightly forward, hands clasped.",
+    "scene_context": {
+      "visible_setting": "Small diner booth, warm amber overhead light, Formica table between them, nighttime visible through window",
+      "narrative_situation": "A long-overdue conversation between two people reconnecting after years apart",
+      "narrative_confidence": 0.65
+    }
+  },
+  "persons": [
+    {
+      "person_index": 0,
+      "spatial_position": "left",
+      "face_analysis": {
+        "face_clearly_visible": true,
+        "face_size_ratio": 0.12,
+        "primary_emotion": "sadness",
+        "secondary_emotion": "fear",
+        "valence": -0.6,
+        "arousal": 0.45,
+        "intensity": 0.65,
+        "expression_caption": "His face carries the cost of speaking something long held back. In the opening frames, his brows are drawn together at the inner corners and slightly raised — the classic grief-plus-effort configuration. His eyes are damp but not spilling, with a visible glisten under the warm light. His mouth opens and closes with speech, but between sentences it compresses into a tight line, the lower lip pulling inward as though biting back more than he intends to say. Mid-shot, a tremor passes through his chin — a single involuntary ripple that he suppresses by clenching his jaw. By the final frames, his eyes drop downward and the brows soften, as though the act of telling has partially exhausted the grief behind it.",
+        "alternative_captions": {
+          "direct": "Inner brows raised and drawn together. Eyes damp, glistening. Mouth opens for speech then compresses between sentences. Chin tremor mid-shot, suppressed by jaw clench. Eyes drop downward at the end.",
+          "literary": "His face is doing the work of translation — converting years of silence into words, and each word costs him visibly. The chin betrays him once, trembling before he catches it with his jaw, and by the end his eyes have retreated downward as though they have shown enough.",
+          "direction": "Grief-effort face: inner brows up and together, asymmetric. Wet eyes — glisten, NOT tears falling. Mouth opens for dialogue, compresses between lines — lower lip tucks in. Mid-shot: single chin tremor, 1 second, then jaw clench to stop it. Final frames: gaze drops, brows soften, exhaustion replaces effort. The key is controlled vulnerability — he is choosing to be open and it is costing him.",
+          "situational": "As if every sentence he speaks is being pulled from a place he sealed shut years ago, and the unsealing hurts more than the memory itself."
+        
+... (truncated for brevity)
+
+--- Example 2 (example_multi_action_009) ---
+{
+  "shot_id": "example_multi_action_009",
+  "source_movie": "The_Raid_2011",
+  "shot_context": {
+    "shot_type": "medium",
+    "shot_emotion_summary": "A three-way confrontation at the edge of violence: concentrated aggression from the attacker, cold readiness from the defender, and rising panic from the trapped bystander.",
+    "shot_motion_summary": "Person 0 drives forward with a right-arm strike. Person 1 shifts weight into a blocking stance. Person 2 scrambles backward along the wall.",
+    "scene_context": {
+      "visible_setting": "Narrow concrete corridor, exposed pipes along ceiling, flickering overhead light casting harsh shadows, debris on floor",
+      "narrative_situation": "A violent encounter in a confined space with uneven odds",
+      "narrative_confidence": 0.55
+    }
+  },
+  "persons": [
+    {
+      "person_index": 0,
+      "spatial_position": "left",
+      "face_analysis": {
+        "face_clearly_visible": true,
+        "face_size_ratio": 0.08,
+        "primary_emotion": "anger",
+        "secondary_emotion": null,
+        "valence": -0.8,
+        "arousal": 0.95,
+        "intensity": 0.9,
+        "expression_caption": "His face is locked into focused rage. The brows are driven sharply downward and compressed together, creating a deep V-shaped furrow. His eyes are narrowed but intensely focused — not squinting from light but from muscular contraction of the orbicularis, channeling all visual attention to the target. His upper lip is raised, exposing the upper teeth in an involuntary aggression display. The jaw is clenched and thrust slightly forward, the masseter visibly defined. Across the shot duration, the expression does not change — it is sustained at maximum intensity, a face that has committed completely to the action. Slight motion blur is present in the earliest frame due to the forward momentum of the strike, but the expression is readable throughout.",
+        "alternative_captions": {
+          "direct": "Brows driven down into a deep V-furrow. Eyes narrowed with intense focus. Upper lip raised, teeth exposed. Jaw clenched and thrust forward. Expression held at peak intensity throughout.",
+          "literary": "His face has become a weapon — every muscle recruited into an architecture of violence, the brows slamming down like shutters, the lip curling back to reveal something ancestral and predatory, the jaw set like a thing that has forgotten how to unclench.",
+          "direction": "Maximum aggression hold. Brows down hard — deep V-furrow. Eyes narrow, NOT squint — this is focus, not discomfort. Upper lip raise: teeth visible. Jaw forward, masseter engaged. HOLD this through the entire strike. No variation. No softening. The face is a mask of committed force.",
+          "situational": "With the concentrated ferocity of someone who has stopped calculating and started operating on pure kinetic intent."
+        },
+        "facial_components": {
+          "eyes": "Narrowed from orbicularis contraction, intensely 
+... (truncated for brevity)
+
+
+=== NOTES FOR INFERENCE SCRIPT ===
+- Replace {shot_id}, {source_movie}, {num_people}, {frames_placeholder} with actual values
+- Attach actual frames as images in the multimodal message
+- Use guided_json with the schema from json_schema_integrated.md Section 8
+- Sampling: temperature=0.2, top_p=0.9, max_tokens=2048
+- Frame count: single/dominant=8, multi=4
+- Frame resize: shorter side = 448px

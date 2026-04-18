@@ -1,0 +1,169 @@
+{
+  "shot_id": "example_single_thriller_002",
+  "source_movie": "Sicario_2015",
+
+  "shot_context": {
+    "shot_type": "medium close-up",
+    "shot_emotion_summary": "Heightened alertness transitioning to controlled fear as the character scans an unseen threat.",
+    "shot_motion_summary": "Quick head turn to the right followed by a freeze, right hand rising defensively to chest height.",
+    "scene_context": {
+      "visible_setting": "Dusty vehicle interior, harsh daylight through windshield, beige upholstery",
+      "narrative_situation": "Surveillance operation where something unexpected appears",
+      "narrative_confidence": 0.5
+    }
+  },
+
+  "persons": [
+    {
+      "person_index": 0,
+      "spatial_position": "center",
+
+      "face_analysis": {
+        "face_clearly_visible": true,
+        "face_size_ratio": 0.18,
+
+        "primary_emotion": "fear",
+        "secondary_emotion": "surprise",
+        "valence": -0.6,
+        "arousal": 0.8,
+        "intensity": 0.7,
+
+        "expression_caption": "At the start of the shot, her face is neutral with focused attention — eyes scanning methodically. Then a rapid shift: her eyes widen noticeably, brows jump upward, and her lips part as breath catches. The transition takes less than half a second. She freezes in this expression for the remaining frames, the widened eyes now locked on a fixed point to the right, lower lip trembling almost imperceptibly. The fear is controlled — no scream, no dramatic mouth — but the eye tension and brow elevation betray genuine alarm.",
+
+        "alternative_captions": {
+          "direct": "Her eyes widen suddenly. Brows rise. Lips part. She freezes, staring to the right with visible alarm.",
+          "literary": "The calm in her eyes shatters like glass — they blow wide, catching harsh light, and her breath becomes something visible in the parting of her lips. Then stillness, the kind that comes after the mind has registered danger but before the body has decided what to do.",
+          "direction": "Neutral scan for 2 beats. On cue, snap eye-widen plus brow-raise — fast, under 0.5s. Freeze. Lips part on the inhale, lower lip micro-tremor. Hold the widened stare to camera-right, do not blink for the remaining frames.",
+          "situational": "As if she has just seen through the windshield exactly the thing she was briefed might be there but hoped would not be."
+        },
+
+        "facial_components": {
+          "eyes": "Widen sharply, white visible above iris, locked rightward, no blink after the initial reaction",
+          "eyebrows": "Both raise together, inner corners slightly higher, creating horizontal forehead lines",
+          "mouth": "Parts on inhale, lower lip shows micro-tremor, upper teeth barely visible",
+          "jaw": "Drops slightly, not fully open",
+          "gaze_direction": "right",
+          "head_pose": "3q_right"
+        },
+
+        "facial_attributes": {
+          "apparent_gender": "female",
+          "apparent_age_range": "young_adult",
+          "glasses": false,
+          "facial_hair": "none",
+          "head_covering": "none",
+          "mask": false,
+          "makeup_visible": false,
+          "distinctive_notes": "Sunburn across nose and cheeks. Hair pulled back tight."
+        },
+
+        "temporal_change": "transition",
+        "micro_expression": false,
+
+        "observable_blendshape_hints": {
+          "brow_raise_inner": "strong",
+          "brow_raise_outer": "medium",
+          "brow_furrow": "none",
+          "eye_widen": "strong",
+          "eye_squint": "none",
+          "eye_blink_state": "open",
+          "cheek_raise": "none",
+          "nose_wrinkle": "none",
+          "upper_lip_raise": "slight",
+          "lip_corner_pull": "none",
+          "lip_corner_depress": "none",
+          "lip_tighten": "none",
+          "lip_part": "medium",
+          "jaw_clench": "none",
+          "jaw_drop": "slight"
+        },
+
+        "expression_confidence": 0.90
+      },
+
+      "body_analysis": {
+        "body_clearly_visible": true,
+
+        "shot_frame_of_body": "half_body",
+        "visible_body_parts": ["head", "neck", "shoulders", "upper_arms", "forearms", "hands", "torso"],
+
+        "motion_caption": "She begins seated upright in the vehicle, torso angled slightly left. On the reaction moment, her head snaps right in a fast turn — the motion is sharp and involuntary. Simultaneously, her right hand lifts from her lap to chest height, palm outward in a defensive halt gesture. Her left hand grips the edge of the seat, knuckles whitening. After the snap, her entire upper body freezes in a state of rigid alertness. Shoulders rise by about a centimeter, pulled upward by the sudden tension in the trapezius.",
+
+        "alternative_captions": {
+          "direct": "She snaps her head to the right. Her right hand rises to chest height, palm out. Left hand grips the seat edge. Her shoulders rise and freeze.",
+          "literary": "Her body answers before her mind does — the head whips right, the hand flies up as if to push the danger back through the windshield, and then everything locks, a body turned to architecture.",
+          "direction": "Seated, loose. On cue: fast head snap right — under 0.3 seconds. Right hand up to chest, palm open, defensive. Left hand grabs seat edge hard. Freeze everything. Shoulders up 1cm, hold. Do not soften for the remaining beats.",
+          "situational": "With the reflexive precision of someone who has trained for this moment and is now discovering that training does not eliminate the fear, only organizes it."
+        },
+
+        "action_primary": "looking",
+        "action_quality": {
+          "intensity": "high",
+          "tone": "tense",
+          "tempo": "punctuated"
+        },
+        "body_focus": "upper_body",
+
+        "kinematics_hint": {
+          "periodicity": "non_periodic",
+          "symmetry": "bilateral_asymmetric",
+          "duration_class": "peak_then_release",
+          "trajectory": "arc"
+        },
+
+        "upper_body_detail": {
+          "head": "Fast snap turn to the right, then frozen in 3/4 right position",
+          "neck": "Extends and locks, cords visible from tension",
+          "shoulders": "Rise approximately 1cm, pulled upward by trapezius tension, then held",
+          "arms": "Right arm lifts from lap to chest height, elbow bent. Left arm extends to seat edge.",
+          "hands": "Right hand open, palm outward at chest height — defensive gesture. Left hand gripping seat edge, knuckles white.",
+          "torso": "Initially angled slightly left, then straightens and locks on the reaction",
+          "posture": "sitting"
+        },
+
+        "gesture_detail": "Right hand rises to chest height with palm facing outward in a stop/halt defensive gesture. Left hand grips the car seat edge with visible force, fingers wrapped over the edge, knuckles whitening. Head turns sharply rightward — not a casual glance but a rapid snap.",
+        "hands_visible": true,
+
+        "interaction": {
+          "count": "solo",
+          "contact": "none",
+          "relation": "parallel",
+          "interacts_with_person_index": []
+        },
+
+        "motion_confidence": 0.91
+      }
+    }
+  ],
+
+  "interaction": {
+    "count": "solo",
+    "contact": "none",
+    "relation": "parallel"
+  },
+
+  "quality_flags": {
+    "face_clearly_visible": true,
+    "body_clearly_visible": true,
+    "motion_blur": false,
+    "occlusion": "none",
+    "lighting": "good",
+    "camera_stable": true,
+    "frame_sampling_ok": true,
+    "vlm_confidence": 0.90
+  },
+
+  "usability_score": {
+    "face": 0.91,
+    "motion": 0.90
+  },
+
+  "exclusion_reason": null,
+
+  "meta": {
+    "vlm_model": "Qwen3-VL-32B-Instruct",
+    "vlm_version": "2026-04",
+    "frames_used": 8,
+    "infer_time_ms": 2350
+  }
+}

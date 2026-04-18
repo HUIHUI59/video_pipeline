@@ -1,0 +1,221 @@
+{
+  "shot_id": "example_dominant_romance_006",
+  "source_movie": "Call_Me_By_Your_Name_2017",
+
+  "shot_context": {
+    "shot_type": "close-up",
+    "shot_emotion_summary": "Tender vulnerability: the primary figure shows quiet longing transitioning to a fragile, uncertain smile. The background figure is barely visible.",
+    "shot_motion_summary": "Minimal motion. A slow head tilt and a hand rising to touch own neck — a self-soothing gesture of nervous vulnerability.",
+    "scene_context": {
+      "visible_setting": "Sun-dappled garden terrace, warm golden afternoon light, stone balustrade blurred in background",
+      "narrative_situation": "An intimate moment of unspoken connection between two people",
+      "narrative_confidence": 0.5
+    }
+  },
+
+  "persons": [
+    {
+      "person_index": 0,
+      "spatial_position": "center",
+
+      "face_analysis": {
+        "face_clearly_visible": true,
+        "face_size_ratio": 0.28,
+        "primary_emotion": "joy",
+        "secondary_emotion": "fear",
+        "valence": 0.4,
+        "arousal": 0.3,
+        "intensity": 0.5,
+
+        "expression_caption": "A smile that arrives reluctantly and does not quite commit. It begins in the eyes — a softening of the orbital tension, a brightening of the gaze as it lifts. The mouth follows slowly: the corners pull upward by degrees, but the upper lip does not fully engage, creating an asymmetric half-smile that favors the left side. The smile is tinged with nervousness: the lower lip is caught briefly between the teeth in the early frames, and even at its fullest the expression retains a guarded quality, as though the joy it represents is too new and too fragile to be shown entirely.",
+
+        "alternative_captions": {
+          "direct": "His eyes soften first. Then the mouth smiles gradually — asymmetric, left side higher. The lower lip is briefly bitten. The smile stays guarded.",
+          "literary": "Joy arrives on his face like light under a door — first a brightening of the eyes, then a slow unlocking of the mouth that never fully opens, as though what he feels is still partly a secret he is keeping from himself.",
+          "direction": "Build the smile from the eyes outward. Beat 1: eye soften, orbital relax. Beat 2: lip bite, release. Beat 3: left corner of mouth lifts — asymmetric, slight. Hold. Never fully commit — the beauty is in the incompleteness. Keep a thread of vulnerability in the upper eyelids.",
+          "situational": "As if he is allowing himself to feel something he has been resisting, and the smile is the first crack in that resistance — not a surrender, but an admission."
+        },
+
+        "facial_components": {
+          "eyes": "Softened, brightened, upward gaze, slight orbital relaxation, lids at natural opening",
+          "eyebrows": "Neutral to slightly raised, soft, no tension",
+          "mouth": "Asymmetric half-smile favoring left side, lower lip briefly caught between teeth then released",
+          "jaw": "Relaxed, slightly dropped on the smile",
+          "gaze_direction": "right",
+          "head_pose": "3q_right"
+        },
+
+        "facial_attributes": {
+          "apparent_gender": "male",
+          "apparent_age_range": "teen",
+          "glasses": false,
+          "facial_hair": "none",
+          "head_covering": "none",
+          "mask": false,
+          "makeup_visible": false,
+          "distinctive_notes": "Curly dark hair catching golden light. Sun-tanned skin. Strong nose."
+        },
+
+        "temporal_change": "building",
+        "micro_expression": false,
+
+        "observable_blendshape_hints": {
+          "brow_raise_inner": "slight",
+          "brow_raise_outer": "slight",
+          "brow_furrow": "none",
+          "eye_widen": "none",
+          "eye_squint": "slight",
+          "eye_blink_state": "open",
+          "cheek_raise": "slight",
+          "nose_wrinkle": "none",
+          "upper_lip_raise": "none",
+          "lip_corner_pull": "medium",
+          "lip_corner_depress": "none",
+          "lip_tighten": "none",
+          "lip_part": "slight",
+          "jaw_clench": "none",
+          "jaw_drop": "slight"
+        },
+
+        "expression_confidence": 0.91
+      },
+
+      "body_analysis": {
+        "body_clearly_visible": true,
+        "shot_frame_of_body": "bust",
+        "visible_body_parts": ["head", "neck", "shoulders"],
+
+        "motion_caption": "Very little body motion. His head tilts slowly to the right — a gentle, unforced inclination that takes about a second to complete. His right hand rises from below frame to touch the side of his own neck, fingers resting lightly on the skin just below the jaw — a self-soothing gesture of nervous vulnerability. The hand stays there, not gripping, just resting. His shoulders are relaxed and slightly asymmetric — left dropped a centimeter lower than right, creating a casual, open posture.",
+
+        "alternative_captions": {
+          "direct": "His head tilts right slowly. His right hand rises to touch the side of his neck. Shoulders relaxed and slightly asymmetric.",
+          "literary": "He tilts into the moment the way a flower tilts toward light — slowly, without deciding to — and his hand finds his own neck, fingers resting there like a question he is not ready to ask out loud.",
+          "direction": "Slow head tilt right, 1 second. Right hand rises to own neck — light touch, fingers on skin below jaw. Not a grip, not a scratch. A resting. Left shoulder drops 1cm lower than right — asymmetric ease. Minimal. Everything here is small.",
+          "situational": "With the unconscious body language of someone who is simultaneously trying to appear casual and failing beautifully at it."
+        },
+
+        "action_primary": "looking",
+        "action_quality": {
+          "intensity": "low",
+          "tone": "relaxed",
+          "tempo": "sustained"
+        },
+        "body_focus": "posture",
+
+        "kinematics_hint": {
+          "periodicity": "non_periodic",
+          "symmetry": "bilateral_asymmetric",
+          "duration_class": "ongoing",
+          "trajectory": "arc"
+        },
+
+        "upper_body_detail": {
+          "head": "Slow tilt to the right, approximately 10-15 degrees, gentle and unforced",
+          "neck": "Exposed on the left side by the tilt, right hand resting on right side",
+          "shoulders": "Relaxed, slightly asymmetric — left dropped 1cm lower than right",
+          "arms": "Right arm rises from below frame. Left arm not visible.",
+          "hands": "Right hand resting lightly on right side of neck below jaw — fingers flat, no grip. Left hand not visible.",
+          "torso": "Not visible below bust line",
+          "posture": "standing"
+        },
+
+        "gesture_detail": "Right hand rises to right side of own neck — a self-touching gesture with fingers resting flat on skin below the jawline. Not scratching, not gripping — a light, sustained contact that reads as nervous self-soothing. Head tilts right slowly and holds.",
+        "hands_visible": true,
+
+        "interaction": {
+          "count": "dyadic",
+          "contact": "none",
+          "relation": "coordinated",
+          "interacts_with_person_index": [1]
+        },
+
+        "motion_confidence": 0.84
+      }
+    },
+
+    {
+      "person_index": 1,
+      "spatial_position": "background",
+
+      "face_analysis": {
+        "face_clearly_visible": false,
+        "face_size_ratio": 0.02,
+        "primary_emotion": null,
+        "secondary_emotion": null,
+        "valence": null,
+        "arousal": null,
+        "intensity": null,
+        "expression_caption": null,
+        "alternative_captions": null,
+        "facial_components": null,
+        "facial_attributes": {
+          "apparent_gender": "male",
+          "apparent_age_range": "adult",
+          "glasses": null,
+          "facial_hair": null,
+          "head_covering": "none",
+          "mask": false,
+          "makeup_visible": null,
+          "distinctive_notes": "Blurred in background. Face too small and defocused for expression analysis."
+        },
+        "temporal_change": null,
+        "micro_expression": null,
+        "observable_blendshape_hints": null,
+        "expression_confidence": 0.10
+      },
+
+      "body_analysis": {
+        "body_clearly_visible": false,
+        "shot_frame_of_body": "wide",
+        "visible_body_parts": ["head", "shoulders"],
+        "motion_caption": null,
+        "alternative_captions": null,
+        "action_primary": null,
+        "action_quality": null,
+        "body_focus": null,
+        "kinematics_hint": null,
+        "upper_body_detail": null,
+        "gesture_detail": null,
+        "hands_visible": false,
+        "interaction": {
+          "count": "dyadic",
+          "contact": "none",
+          "relation": "coordinated",
+          "interacts_with_person_index": [0]
+        },
+        "motion_confidence": 0.10
+      }
+    }
+  ],
+
+  "interaction": {
+    "count": "dyadic",
+    "contact": "none",
+    "relation": "coordinated"
+  },
+
+  "quality_flags": {
+    "face_clearly_visible": true,
+    "body_clearly_visible": true,
+    "motion_blur": false,
+    "occlusion": "none",
+    "lighting": "good",
+    "camera_stable": true,
+    "frame_sampling_ok": true,
+    "vlm_confidence": 0.89
+  },
+
+  "usability_score": {
+    "face": 0.91,
+    "motion": 0.62
+  },
+
+  "exclusion_reason": null,
+
+  "meta": {
+    "vlm_model": "Qwen3-VL-32B-Instruct",
+    "vlm_version": "2026-04",
+    "frames_used": 8,
+    "infer_time_ms": 2800
+  }
+}
