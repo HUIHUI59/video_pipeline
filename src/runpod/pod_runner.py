@@ -22,12 +22,15 @@ Stage 5 Pod 侧：在 Runpod H100 Pod 里跑。
 """
 
 from __future__ import annotations
-import argparse, json, logging, os, signal, sys, time
+import argparse, base64, io, json, logging, os, signal, sys, time
 from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from src.runpod.schemas import ManifestEntry, ShotLabel  # noqa
+from src.runpod.schemas import (  # noqa
+    ManifestEntry, ShotLabel,
+    Round1Label, Round2Label,
+)
 
 import yaml
 
@@ -48,6 +51,14 @@ def _frame_count_for_category(category: str, cfg_sampling: dict[str, Any]) -> in
     if category in ("single", "dominant"):
         return int(cfg_sampling.get("frames_single_dominant", 8))
     return int(cfg_sampling.get("frames_multi_wide", 4))
+
+
+def _pil_to_data_url(img, fmt: str = "JPEG", quality: int = 90) -> str:
+    """PIL Image -> data:image/jpeg;base64,... (vLLM chat API 要的 OpenAI 格式)"""
+    buf = io.BytesIO()
+    img.save(buf, format=fmt, quality=quality)
+    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+    return f"data:image/{fmt.lower()};base64,{b64}"
 
 
 def _sample_frames(video_path: str, n_frames: int, resize_shortest: int):
@@ -213,6 +224,7 @@ def main() -> int:
         from normalize_tags import TagNormalizer
         from validate_body_analysis import (
             ShotValidator, TaxonomyLoader, SynonymLoader,
+            FRAMING_MAX_PARTS,
         )
     except ImportError as e:
         log.error(f"delivery_v1 scripts import 失败: {e}")
@@ -236,32 +248,134 @@ def main() -> int:
     validator  = ShotValidator(TaxonomyLoader(tax_path), SynonymLoader(syn_path))
     log.info("delivery_v1 集成就绪（system_prompt + normalize + validate）")
 
+    # vLLM 版本间 GuidedDecodingParams 的位置几经变动：
+    #   - 老版本：vllm.sampling_params.GuidedDecodingParams
+    #   - 较新：  vllm.GuidedDecodingParams
+    #   - 更新：  vllm.model_executor.guided_decoding 里或直接废弃，
+    #             改成 SamplingParams(guided_decoding=dict(...))
+    # 多路 import 回退；都找不到就让 vLLM 自己处理 dict 形式。
     try:
         from vllm import LLM, SamplingParams
-        from vllm.sampling_params import GuidedDecodingParams
     except ImportError as e:
         log.error(f"vLLM 未安装：{e}。请先跑 tools/pod_setup.sh")
         return 2
 
+    GuidedDecodingParams = None
+    for _modname in ("vllm.sampling_params", "vllm",
+                     "vllm.model_executor.guided_decoding"):
+        try:
+            _mod = __import__(_modname, fromlist=["GuidedDecodingParams"])
+            GuidedDecodingParams = getattr(_mod, "GuidedDecodingParams", None)
+            if GuidedDecodingParams is not None:
+                log.info(f"GuidedDecodingParams 来自 {_modname}")
+                break
+        except Exception:
+            pass
+    if GuidedDecodingParams is None:
+        log.info("GuidedDecodingParams 类未找到，改用 dict 形式 guided_decoding=dict(json=schema)")
+
     model_name = model_cfg["name"]
     precision  = model_cfg.get("precision", "bf16")
     dtype      = {"bf16": "bfloat16", "fp8": "auto"}.get(precision, "auto")
-    log.info(f"加载模型 {model_name} (dtype={dtype}) ...")
+
+    # 优先用本地 pre-download 的模型路径，避免 vLLM 去 HF hub 再下一份 67GB
+    # 顺序很重要：容器盘本地 NVMe（~3-5 GB/s 读） > Network Volume MooseFS（~50 MB/s）
+    # 同样 67GB 模型：本地 30s 加载完 vs Network Volume 冷读 22 min
+    model_path = model_cfg.get("path")
+    if not model_path:
+        slug = model_name.split("/")[-1].lower()  # Qwen3-VL-32B-Instruct → qwen3-vl-32b-instruct
+        for candidate in (
+            # ── 本地容器盘优先 ─────────────────────────────
+            "/root/qwen3-vl-32b",
+            "/root/models/qwen3-vl-32b",
+            f"/root/models/{slug}",
+            # ── Network Volume 兜底 ───────────────────────
+            "/workspace/models/qwen3-vl-32b",
+            f"/workspace/models/{slug}",
+            f"/workspace/models/{model_name.split('/')[-1]}",
+        ):
+            if (Path(candidate) / "config.json").exists():
+                model_path = candidate
+                break
+
+    model_load_src = model_path or model_name
+    # Qwen3-VL-32B 默认 max_seq_len=262144（262K token），vLLM 要为此预留 KV cache
+    # ≈ 64GB；加上 67GB 模型权重远超 80GB H100。
+    # 我们单 shot 实际用量：system~800 + user~1600 + 8 frames×1500 + output 2048 ≈ 16K。
+    # 设 max_model_len=16384 让 KV cache 降到可管理的大小。
+    max_model_len = int(model_cfg.get("max_model_len", 16384))
+    gpu_mem_util  = float(model_cfg.get("gpu_memory_utilization", 0.9))
+
+    log.info(f"加载模型 {model_load_src} (dtype={dtype}, max_model_len={max_model_len}, "
+             f"gpu_util={gpu_mem_util}) ...")
+    if model_path:
+        log.info(f"  使用本地路径，跳过 HF hub 下载")
+    else:
+        log.warning(f"  未找到本地 pre-download，vLLM 会从 HF hub 下载到 {os.environ.get('HF_HOME')}")
     t0 = time.time()
-    llm = LLM(model=model_name, dtype=dtype,
+    llm = LLM(model=model_load_src, dtype=dtype,
               trust_remote_code=True,
+              max_model_len=max_model_len,
+              gpu_memory_utilization=gpu_mem_util,
               limit_mm_per_prompt={"image": 16})
     log.info(f"模型加载完成 ({time.time()-t0:.1f}s)")
 
-    schema = ShotLabel.model_json_schema()
-    guided = GuidedDecodingParams(json=schema)
-    sampling = SamplingParams(
-        temperature       = float(samp.get("temperature", 0.2)),
-        top_p             = float(samp.get("top_p", 0.9)),
-        max_tokens        = int(samp.get("max_tokens", 2048)),
-        repetition_penalty= float(samp.get("repetition_penalty", 1.05)),
-        guided_decoding   = guided,
-    )
+    # 两轮推理的两份 schema（docs/problem/01_stage5_output_truncation.md 方案 E）
+    schema_r1 = Round1Label.model_json_schema()
+    schema_r2 = Round2Label.model_json_schema()
+
+    def _build_sampling(schema: dict, max_tokens: int, round_label: str) -> SamplingParams:
+        """结构化输出 API 按新→旧依次尝试；全失败降级无约束。"""
+        base_kwargs = dict(
+            temperature       = float(samp.get("temperature", 0.2)),
+            top_p             = float(samp.get("top_p", 0.9)),
+            max_tokens        = max_tokens,
+            repetition_penalty= float(samp.get("repetition_penalty", 1.05)),
+        )
+        attempts_: list[tuple[str, dict]] = []
+        if GuidedDecodingParams is not None:
+            attempts_.append(
+                (f"{round_label}: guided_decoding=GuidedDecodingParams(json=...)",
+                 dict(**base_kwargs,
+                      guided_decoding=GuidedDecodingParams(json=schema))))
+        # 探测 vLLM 0.19 的新类
+        SOP_ = None
+        for _mp in ("vllm.sampling_params",
+                    "vllm.structured_output",
+                    "vllm.v1.structured_output",
+                    "vllm.v1.structured_output.params"):
+            try:
+                _mod = __import__(_mp, fromlist=["StructuredOutputsParams"])
+                SOP_ = getattr(_mod, "StructuredOutputsParams", None)
+                if SOP_ is not None:
+                    break
+            except ImportError:
+                continue
+        if SOP_ is not None:
+            try:
+                attempts_.append(
+                    (f"{round_label}: structured_outputs=StructuredOutputsParams(json=...)",
+                     dict(**base_kwargs, structured_outputs=SOP_(json=schema))))
+            except TypeError:
+                pass
+        for lbl, kw in attempts_:
+            try:
+                sp = SamplingParams(**kw)
+                log.info(f"结构化输出启用：{lbl}")
+                return sp
+            except TypeError as ex:
+                log.debug(f"结构化输出尝试失败 [{lbl}]: {ex}")
+        log.warning(f"{round_label}: 未找到可用结构化输出 API，降级无约束。"
+                    f" max_tokens={max_tokens} 给足余量。")
+        return SamplingParams(**base_kwargs)
+
+    # 两轮各自的 output 预算：
+    #   - Round 1 （body + scene + meta，无 face）：实测 2 人 ~3500-4500 token，给 6144
+    #   - Round 2 （face_analysis only，按 person 对齐）：2 人 ~5000 token，给 6144
+    max_tokens_r1 = int(samp.get("max_tokens_round1", 6144))
+    max_tokens_r2 = int(samp.get("max_tokens_round2", 6144))
+    sampling_r1 = _build_sampling(schema_r1, max_tokens_r1, "Round1-body")
+    sampling_r2 = _build_sampling(schema_r2, max_tokens_r2, "Round2-face")
     resize_shortest = int(samp.get("resize_shortest", 448))
 
     ok = bad = 0
@@ -290,25 +404,33 @@ def main() -> int:
         cat_key = _category_for_prompt(e.shot_category)
         user_text = _fill_user_template(user_templates[cat_key], e)
 
-        messages = [
+        image_parts = [{"type": "image_url",
+                        "image_url": {"url": _pil_to_data_url(im)}}
+                       for im in frames]
+
+        # ── Round 1：body + scene + interaction + quality + usability ──
+        # system_prompt 保持 delivery_v1 原版；user_text 末尾追加硬指令：本轮只出 body
+        r1_hint = (
+            "\n\nCRITICAL ROUND 1 INSTRUCTION: For this round, DO NOT output "
+            "face_analysis for any person. The output schema for this round "
+            "excludes face_analysis entirely — focus on body_analysis, "
+            "shot_context, interaction, quality_flags, usability_score. "
+            "Face analysis will be done in a separate focused round.\n\n"
+            "TOKEN BUDGET IS STRICT. Output COMPACT JSON on minimal lines: "
+            "NO pretty-printing, NO 4-space indentation, NO unnecessary "
+            "whitespace. Keep every string description CONCISE — "
+            "motion_caption under 80 words, each alternative_caption under "
+            "40 words. If in doubt, write less, not more."
+        )
+        messages_r1 = [
             {"role": "system", "content": system_prompt},
             {"role": "user",   "content": [
-                *[{"type": "image", "image": im} for im in frames],
-                {"type": "text", "text": user_text},
+                *image_parts,
+                {"type": "text", "text": user_text + r1_hint},
             ]},
         ]
 
-        try:
-            t1 = time.time()
-            res = llm.chat(messages, sampling, use_tqdm=False)
-            raw = res[0].outputs[0].text
-            infer_ms = int((time.time() - t1) * 1000)
-        except Exception as ex:
-            log.error(f"[ERR] 推理失败 {e.shot_id}: {ex}")
-            bad += 1
-            continue
-
-        # 失败保存助手
+        # 失败保存助手（提前定义，下面要用）
         def _save_failed(slug: str, raw_text: str, reason: str,
                          errors: list | None = None,
                          warnings: list | None = None) -> None:
@@ -324,14 +446,94 @@ def main() -> int:
 
         slug = e.shot_id.replace("/", "__")
 
-        # 1) JSON 解析
         try:
-            obj = json.loads(raw)
+            t1 = time.time()
+            res_r1 = llm.chat(messages_r1, sampling_r1, use_tqdm=False)
+            raw_r1 = res_r1[0].outputs[0].text
+            infer_ms_r1 = int((time.time() - t1) * 1000)
         except Exception as ex:
-            log.error(f"[ERR parse] {e.shot_id}: {ex}")
-            _save_failed(slug, raw, f"json_parse: {ex}")
+            log.error(f"[ERR] Round1 推理失败 {e.shot_id}: {ex}")
             bad += 1
             continue
+
+        # 1a) Round 1 JSON 解析
+        try:
+            obj = json.loads(raw_r1)
+        except Exception as ex:
+            log.error(f"[ERR parse-r1] {e.shot_id}: {ex}")
+            _save_failed(slug, raw_r1, f"json_parse_round1: {ex}")
+            bad += 1
+            continue
+
+        # ── Round 2：face_analysis only，对 Round 1 识别到的每个 person ──
+        persons_r1 = obj.get("persons", []) or []
+        n_persons = len(persons_r1)
+        if n_persons == 0:
+            log.info(f"[skip-face] {e.shot_id} Round1 未识别到 person，跳过 Round2")
+            infer_ms_r2 = 0
+        else:
+            # 构造 Round 2 prompt：告诉模型 person 数量和 index，只出 face
+            pos_list = ", ".join(
+                f"index {p.get('person_index', i)}="
+                f"{p.get('spatial_position', 'unknown')}"
+                for i, p in enumerate(persons_r1)
+            )
+            face_user_text = (
+                f"You previously identified {n_persons} person(s) in this "
+                f"video shot, at positions: {pos_list}.\n\n"
+                "Now provide detailed face_analysis for EACH person, indexed "
+                "by person_index exactly matching the previous round. "
+                "Follow the delivery_v1 face_analysis spec (primary_emotion, "
+                "valence/arousal/intensity, expression_caption, "
+                "alternative_captions, facial_components, facial_attributes, "
+                "temporal_change, observable_blendshape_hints, "
+                "expression_confidence, etc.). Output ONLY the JSON "
+                '{"persons": [{"person_index": i, "face_analysis": {...}}, ...]}'
+                "\n\nTOKEN BUDGET IS STRICT. Output COMPACT JSON on minimal "
+                "lines: NO pretty-printing, NO 4-space indentation, NO "
+                "unnecessary whitespace. Keep every string description "
+                "CONCISE — expression_caption under 60 words, each "
+                "alternative_caption under 40 words. If in doubt, write less."
+            )
+            messages_r2 = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user",   "content": [
+                    *image_parts,
+                    {"type": "text", "text": face_user_text},
+                ]},
+            ]
+            try:
+                t2 = time.time()
+                res_r2 = llm.chat(messages_r2, sampling_r2, use_tqdm=False)
+                raw_r2 = res_r2[0].outputs[0].text
+                infer_ms_r2 = int((time.time() - t2) * 1000)
+            except Exception as ex:
+                log.warning(f"[warn] Round2 face 推理失败 {e.shot_id}: {ex}"
+                            f"（保留 Round1 结果，face_analysis=null）")
+                raw_r2 = ""
+                infer_ms_r2 = 0
+
+            # 1b) Round 2 JSON 解析 + 合并
+            if raw_r2:
+                try:
+                    face_obj = json.loads(raw_r2)
+                    face_by_idx = {
+                        fp.get("person_index"): fp.get("face_analysis")
+                        for fp in face_obj.get("persons", [])
+                        if isinstance(fp, dict)
+                    }
+                    for i, p in enumerate(persons_r1):
+                        idx = p.get("person_index", i)
+                        fa = face_by_idx.get(idx)
+                        if fa is not None:
+                            p["face_analysis"] = fa
+                except Exception as ex:
+                    log.warning(f"[warn] Round2 parse 失败 {e.shot_id}: {ex}"
+                                f"（face_analysis 留空）")
+                    _save_failed(slug + ".round2", raw_r2,
+                                 f"json_parse_round2: {ex}")
+
+        infer_ms = infer_ms_r1 + infer_ms_r2
 
         # 2) normalize_tags（动词归一、同义词、forbidden 镜头术语、intensity/tone 归轴）
         try:
@@ -340,6 +542,24 @@ def main() -> int:
         except Exception as ex:
             log.warning(f"[warn normalize] {e.shot_id}: {ex}（继续用原始 obj）")
 
+        # 2.5) clamp visible_body_parts 到 shot_frame_of_body 白名单
+        # delivery_v1 validator 的硬规则：bust 只能 head/neck/shoulders，
+        # 模型经常自作主张多列 arms/hands/torso 导致 validate 挂掉。
+        # 这里直接按白名单 filter，不合法的部件删除，模型意图保留。
+        try:
+            for _p in obj.get("persons", []):
+                _ba = _p.get("body_analysis") or {}
+                _frame = _ba.get("shot_frame_of_body")
+                _parts = _ba.get("visible_body_parts")
+                if (_frame in FRAMING_MAX_PARTS
+                        and isinstance(_parts, list)):
+                    _allowed = FRAMING_MAX_PARTS[_frame]
+                    _ba["visible_body_parts"] = [
+                        p for p in _parts if p in _allowed
+                    ]
+        except Exception as ex:
+            log.warning(f"[warn clamp body-parts] {e.shot_id}: {ex}（继续）")
+
         # 3) 注入 meta
         obj.setdefault("meta", {})
         obj["meta"].setdefault("vlm_model",   model_name)
@@ -347,14 +567,12 @@ def main() -> int:
         obj["meta"]["frames_used"]   = n_frames
         obj["meta"]["infer_time_ms"] = infer_ms
 
-        # 4) Pydantic 结构校验
-        try:
-            ShotLabel.model_validate(obj)
-        except Exception as ex:
-            log.error(f"[ERR schema] {e.shot_id}: {ex}")
-            _save_failed(slug, raw, f"pydantic: {ex}")
-            bad += 1
-            continue
+        # 4) Pydantic 结构校验 —— 已关闭。
+        #    理由：权威规范在 docs/labelingStandards/external_delivery_v1，
+        #    model 按 delivery_v1 system_prompt 输出，和 schemas.py:ShotLabel
+        #    已不同步（后者是旧 json_schema_integrated.md 的镜像）。
+        #    业务合规改由第 5 步 ShotValidator 把关。
+        #    如果需要重新启用，见 src/runpod/schemas.py 的过期提醒。
 
         # 5) 业务校验（14 项 ShotValidator）— errors=0 才算合格
         try:

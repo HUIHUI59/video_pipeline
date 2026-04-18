@@ -119,9 +119,13 @@ def _rsync_files(files: list[tuple[str, str]],
     ssh_cmd = "ssh " + " ".join(shlex.quote(x) for x in _ssh_opts(pod))
     print(f"\n  SSH 选项: {ssh_cmd}")
     for local, remote in files:
-        # --mkpath (rsync 3.2.3+) 自动创建 remote 的父目录链，避免每个电影子目录
-        # 和带方括号的目录名都要先 ssh mkdir 的开销
-        cmd = ["rsync", "-avz", "--progress", "--mkpath", "-e", ssh_cmd,
+        # --mkpath (rsync 3.2.3+) 自动创建 remote 的父目录链
+        # --no-owner --no-group 跳过 owner/group 同步：WSL uid ≠ Pod uid 会
+        #   触发 "chown Operation not permitted" 让 rsync 退出 rc=23（文件其实
+        #   已经传完），我们不需要保留属主信息
+        cmd = ["rsync", "-avz", "--progress", "--mkpath",
+               "--no-owner", "--no-group",
+               "-e", ssh_cmd,
                local, f"{pod['user']}@{pod['host']}:{remote}"]
         print("  $", " ".join(shlex.quote(c) for c in cmd))
         if not dry_run:
@@ -141,6 +145,9 @@ def main() -> int:
                     help="即使 quality_ok=False 也上传（默认过滤掉太黑/太亮/模糊的镜头）")
     ap.add_argument("--include-landscape", action="store_true",
                     help="即使 shot_category=landscape 也上传（默认无人的镜头不标注）")
+    ap.add_argument("--code-only", action="store_true",
+                    help="只推代码 + 配置 + delivery_v1（跳过 clips 和 manifest）；"
+                         "用于迭代 pod_runner 代码时快速部署。相当于跑 00_push_code.sh。")
     args = ap.parse_args()
 
     cfg = _load_config(args.config)
@@ -158,46 +165,50 @@ def main() -> int:
     clips_root    = os.path.expanduser(paths["local_clips_root"])
     pod_workspace = paths["pod_workspace"]
 
-    if not Path(manifest_dir).exists():
-        print(f"[ERR] manifest 目录不存在: {manifest_dir}", file=sys.stderr)
-        return 1
-
-    print(f"  扫描 manifest: {manifest_dir}")
-    raw = list(_iter_manifest_lines(manifest_dir,
-                                    set(movies) if movies else None))
-    print(f"  校验通过: {len(raw)} 条")
-    filtered = _filter_entries(raw, categories, max_shots,
-                               skip_bad_quality=not args.include_bad_quality,
-                               skip_landscape=not args.include_landscape)
-    print(f"  筛选后:   {len(filtered)} 条  "
-          f"(categories={categories or 'all'}, movies={movies or 'all'}, "
-          f"max={max_shots or '∞'}, skip_bad_quality={not args.include_bad_quality}, "
-          f"skip_landscape={not args.include_landscape})")
-
-    if not filtered:
-        print("[WARN] 没有符合条件的 shot，退出。")
-        return 0
-
-    filt_path = _write_filtered_manifest(filtered)
-    print(f"  筛后 manifest → {filt_path}")
-
-    # 组 rsync 列表：clips + 筛后 manifest + src/runpod/ 代码 + pod_setup + 配置
     file_ops: list[tuple[str, str]] = []
-    for _movie, e in filtered:
-        rel = e.path
-        if rel.startswith("clips/"):
-            local = str(Path(clips_root) / rel[len("clips/"):])
-        else:
-            local = rel if os.path.isabs(rel) else str(Path(clips_root) / rel)
-        remote = f"{pod_workspace}/{rel}"
-        if not Path(local).exists():
-            print(f"  [miss] 本地文件不存在，跳过: {local}")
-            continue
-        file_ops.append((local, remote))
 
-    print(f"  clips 待传: {len(file_ops)} 个")
+    if args.code_only:
+        print("  [code-only] 跳过 clips + manifest，只推代码 + 配置 + delivery_v1")
+    else:
+        if not Path(manifest_dir).exists():
+            print(f"[ERR] manifest 目录不存在: {manifest_dir}", file=sys.stderr)
+            return 1
 
-    file_ops.append((filt_path, f"{pod_workspace}/manifest.jsonl"))
+        print(f"  扫描 manifest: {manifest_dir}")
+        raw = list(_iter_manifest_lines(manifest_dir,
+                                        set(movies) if movies else None))
+        print(f"  校验通过: {len(raw)} 条")
+        filtered = _filter_entries(raw, categories, max_shots,
+                                   skip_bad_quality=not args.include_bad_quality,
+                                   skip_landscape=not args.include_landscape)
+        print(f"  筛选后:   {len(filtered)} 条  "
+              f"(categories={categories or 'all'}, movies={movies or 'all'}, "
+              f"max={max_shots or '∞'}, skip_bad_quality={not args.include_bad_quality}, "
+              f"skip_landscape={not args.include_landscape})")
+
+        if not filtered:
+            print("[WARN] 没有符合条件的 shot，退出。")
+            return 0
+
+        filt_path = _write_filtered_manifest(filtered)
+        print(f"  筛后 manifest → {filt_path}")
+
+        # clips 按筛选后逐个加进 rsync 列表
+        for _movie, e in filtered:
+            rel = e.path
+            if rel.startswith("clips/"):
+                local = str(Path(clips_root) / rel[len("clips/"):])
+            else:
+                local = rel if os.path.isabs(rel) else str(Path(clips_root) / rel)
+            remote = f"{pod_workspace}/{rel}"
+            if not Path(local).exists():
+                print(f"  [miss] 本地文件不存在，跳过: {local}")
+                continue
+            file_ops.append((local, remote))
+
+        print(f"  clips 待传: {len(file_ops)} 个")
+
+        file_ops.append((filt_path, f"{pod_workspace}/manifest.jsonl"))
 
     project_root = Path(__file__).resolve().parents[2]
     for fn in ("__init__.py", "schemas.py", "pod_runner.py"):
@@ -205,9 +216,11 @@ def main() -> int:
         if src.exists():
             file_ops.append((str(src), f"{pod_workspace}/src/runpod/{fn}"))
 
-    pod_setup = project_root / "tools" / "pod_setup.sh"
-    if pod_setup.exists():
-        file_ops.append((str(pod_setup), f"{pod_workspace}/tools/pod_setup.sh"))
+    # 推 tools/ 下所有 .sh（pod_setup.sh、kill_gpu.sh 等）
+    tools_dir = project_root / "tools"
+    if tools_dir.exists():
+        for sh in sorted(tools_dir.glob("*.sh")):
+            file_ops.append((str(sh), f"{pod_workspace}/tools/{sh.name}"))
     file_ops.append((args.config, f"{pod_workspace}/runpod.yaml"))
 
     # 推送 external_delivery_v1 bundle（官方 prompt 构造器 + normalize + validator

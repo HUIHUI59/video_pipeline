@@ -27,18 +27,53 @@ echo "  Pod: ${POD_USER}@${POD_HOST}:${POD_PORT}  workspace=${POD_WS}"
 
 # 远端命令：如果 pod_setup 标志文件不存在就跑一次安装，然后后台跑 runner
 REMOTE_CMD="set -e; cd '${POD_WS}'; \
-  if [ ! -f .pod_setup_done ]; then \
-    echo '首次 setup 环境...'; bash tools/pod_setup.sh && touch .pod_setup_done; \
+  VENV_PY=/opt/labeling-env/bin/python; \
+  # venv 存在性是权威检查：新 Pod 的 container disk 是空的，
+  # 即使 Network Volume 上还有 .pod_setup_done 残留也要重装
+  if [ ! -x \"\$VENV_PY\" ]; then \
+    echo '首次 setup 环境（venv 不存在）...'; \
+    rm -f .pod_setup_done; \
+    bash tools/pod_setup.sh && touch .pod_setup_done; \
+  fi; \
+  if [ ! -x \"\$VENV_PY\" ]; then \
+    echo \"[ERR] 跑完 pod_setup.sh 后 \$VENV_PY 仍不存在。手动 ssh 进 Pod 看 tools/pod_setup.sh 的报错。\"; exit 1; \
   fi; \
   mkdir -p output; \
-  echo '启动 pod_runner（nohup，断开 SSH 不影响）'; \
-  nohup python src/runpod/pod_runner.py --config runpod.yaml \
+  # 把所有 cache 指向 Network Volume (/workspace)，避免容器盘 40GB 被 triton/torch/hf 挤爆
+  export HF_HOME=/workspace/.cache/huggingface; \
+  export XDG_CACHE_HOME=/workspace/.cache; \
+  export TRITON_CACHE_DIR=/workspace/.cache/triton; \
+  export VLLM_CACHE_ROOT=/workspace/.cache/vllm; \
+  export TMPDIR=/workspace/.tmp; \
+  mkdir -p \$HF_HOME \$XDG_CACHE_HOME \$TRITON_CACHE_DIR \$VLLM_CACHE_ROOT \$TMPDIR; \
+  echo \"启动 pod_runner (nohup, using \$VENV_PY)\"; \
+  echo \"  HF_HOME=\$HF_HOME\"; \
+  echo \"  TRITON_CACHE_DIR=\$TRITON_CACHE_DIR\"; \
+  echo \"  VLLM_CACHE_ROOT=\$VLLM_CACHE_ROOT\"; \
+  nohup env HF_HOME=\"\$HF_HOME\" XDG_CACHE_HOME=\"\$XDG_CACHE_HOME\" \
+             TRITON_CACHE_DIR=\"\$TRITON_CACHE_DIR\" VLLM_CACHE_ROOT=\"\$VLLM_CACHE_ROOT\" \
+             TMPDIR=\"\$TMPDIR\" \
+             \"\$VENV_PY\" src/runpod/pod_runner.py --config runpod.yaml \
     >> output/pod_runner.stdout 2>&1 & \
   RUNNER_PID=\$!; \
   echo 'runner pid ='\$RUNNER_PID; \
-  echo 'tail -f output/pod_runner.log (Ctrl+C 退出 tail 不杀 runner)'; \
-  sleep 2; \
-  tail -f output/pod_runner.log 2>/dev/null || true"
+  sleep 5; \
+  if kill -0 \$RUNNER_PID 2>/dev/null; then \
+    echo 'runner 还活着。tail -f log (Ctrl+C 退出 tail 不杀 runner)'; \
+    if [ -f output/pod_runner.log ]; then \
+      tail -f output/pod_runner.log; \
+    else \
+      echo '(pod_runner.log 还没创建，tail stdout 代替)'; \
+      tail -f output/pod_runner.stdout; \
+    fi; \
+  else \
+    echo '[ERR] runner 启动后立刻退出了。pod_runner.stdout 末尾 80 行:'; \
+    tail -80 output/pod_runner.stdout; \
+    echo '---'; \
+    echo '[ERR] pod_runner.log (若存在):'; \
+    tail -40 output/pod_runner.log 2>/dev/null || echo '(日志文件不存在)'; \
+    exit 1; \
+  fi"
 
 ssh -i "$POD_KEY" -p "$POD_PORT" \
     -o StrictHostKeyChecking=no -o ConnectTimeout=10 \

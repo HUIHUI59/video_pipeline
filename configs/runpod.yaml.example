@@ -19,6 +19,10 @@ paths:
 model:
   name: Qwen/Qwen3-VL-32B-Instruct
   precision: bf16            # bf16 (~66.7 GB，H100 80G OK) | fp8 (~35 GB)
+  # Qwen3-VL-32B 原生 max_seq_len=262144（会要求 64GB KV cache，H100 80G 装不下）。
+  # 我们单 shot 实际用量 ~16K token 就够：system~800 + user~1600 + 8帧×1500 + out 2048
+  max_model_len: 16384
+  gpu_memory_utilization: 0.9   # vLLM 可用的显存比例。bf16 用到 0.9 较稳；fp8 可以调到 0.95
 
 filters:
   shot_categories: [single, dominant]   # 先只跑人物特写；改成 [] 则不过滤
@@ -28,7 +32,11 @@ filters:
 sampling:
   temperature:           0.2
   top_p:                 0.9
-  max_tokens:            2048
+  # 两轮推理分别的 output 预算（方案 E，见 docs/problem/01_stage5_output_truncation.md）
+  # 3 人 shot 的 body_analysis 一个人 ~3000 token，pretty-print 又吃 40%，给 10240 留足
+  max_tokens_round1:     10240
+  max_tokens_round2:     10240
+  max_tokens:            10240  # 兼容旧路径（如果以后回退单轮）
   repetition_penalty:    1.05
   frames_single_dominant: 8   # single / dominant 采 8 帧
   frames_multi_wide:      4   # multi / wide / landscape 采 4 帧

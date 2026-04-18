@@ -287,6 +287,38 @@ class ShotLabel(_Base):
 
 
 # ══════════════════════════════════════════════════════════════
+# 两轮推理的子 schema（docs/problem/01_stage5_output_truncation.md 方案 E）
+# Round 1：body + scene + meta；Round 2：face only，按 person_index 合并。
+# 每轮 output 预算 ≤ 6000 token，避免 max_tokens 截断。
+# ══════════════════════════════════════════════════════════════
+
+class Round1Person(_Base):
+    person_index:     int = Field(ge=0)
+    spatial_position: SpatialPosition
+    body_analysis:    Optional[BodyAnalysis] = None
+
+
+class Round1Label(_Base):
+    shot_id:          str
+    source_movie:     str
+    shot_context:     ShotContext
+    persons:          list[Round1Person]
+    interaction:      ShotInteraction
+    quality_flags:    QualityFlags
+    usability_score:  UsabilityScore
+    exclusion_reason: Optional[str] = None
+
+
+class Round2Person(_Base):
+    person_index:  int = Field(ge=0)
+    face_analysis: Optional[FaceAnalysis] = None
+
+
+class Round2Label(_Base):
+    persons: list[Round2Person]
+
+
+# ══════════════════════════════════════════════════════════════
 # Stage 4 manifest entry（upload.py 用它校验 manifest 每一行）
 # ══════════════════════════════════════════════════════════════
 
