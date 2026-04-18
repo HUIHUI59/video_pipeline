@@ -27,7 +27,8 @@
       "Read(//tmp/**)",
       "Bash(mkdir -p mock_workspace/delivery_v1)",
       "Bash(cp -r /home/leo4090/video_pipeline/docs/labelingStandards/external_delivery_v1/docs mock_workspace/delivery_v1/)",
-      "Bash(cp -r /home/leo4090/video_pipeline/docs/labelingStandards/external_delivery_v1/scripts mock_workspace/delivery_v1/)"
+      "Bash(cp -r /home/leo4090/video_pipeline/docs/labelingStandards/external_delivery_v1/scripts mock_workspace/delivery_v1/)",
+      "Bash(rsync --version)"
     ]
   }
 }

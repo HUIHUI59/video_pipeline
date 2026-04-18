@@ -119,7 +119,9 @@ def _rsync_files(files: list[tuple[str, str]],
     ssh_cmd = "ssh " + " ".join(shlex.quote(x) for x in _ssh_opts(pod))
     print(f"\n  SSH 选项: {ssh_cmd}")
     for local, remote in files:
-        cmd = ["rsync", "-avz", "--progress", "-e", ssh_cmd,
+        # --mkpath (rsync 3.2.3+) 自动创建 remote 的父目录链，避免每个电影子目录
+        # 和带方括号的目录名都要先 ssh mkdir 的开销
+        cmd = ["rsync", "-avz", "--progress", "--mkpath", "-e", ssh_cmd,
                local, f"{pod['user']}@{pod['host']}:{remote}"]
         print("  $", " ".join(shlex.quote(c) for c in cmd))
         if not dry_run:
@@ -235,6 +237,19 @@ def main() -> int:
     print("  $", " ".join(shlex.quote(c) for c in mkdir_cmd))
     if not args.dry_run:
         subprocess.run(mkdir_cmd, check=False)
+
+    # 确保 Pod 端有 rsync（Runpod 默认 PyTorch 镜像不带，rsync 必须两端都有）
+    ensure_rsync_cmd = (["ssh"] + _ssh_opts(pod) +
+                        [f"{pod['user']}@{pod['host']}",
+                         "command -v rsync >/dev/null 2>&1 || "
+                         "(apt-get update -qq && apt-get install -y -qq rsync)"])
+    print("  $", " ".join(shlex.quote(c) for c in ensure_rsync_cmd))
+    if not args.dry_run:
+        r = subprocess.run(ensure_rsync_cmd, check=False)
+        if r.returncode != 0:
+            print(f"  [WARN] 无法在 Pod 安装 rsync (rc={r.returncode})，"
+                  f"后续 rsync 可能失败。请手动在 Pod 跑 apt-get install rsync",
+                  file=sys.stderr)
 
     print(f"\n  rsync 共 {len(file_ops)} 个文件 (dry_run={args.dry_run})")
     _rsync_files(file_ops, pod, args.dry_run)
