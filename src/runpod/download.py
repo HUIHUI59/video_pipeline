@@ -61,7 +61,15 @@ def _rsync_from_pod(pod: dict[str, Any], pod_workspace: str,
     os.makedirs(local_root, exist_ok=True)
     ssh_cmd = "ssh " + " ".join(shlex.quote(x) for x in _ssh_opts(pod))
     src  = f"{pod['user']}@{pod['host']}:{pod_workspace}/output/"
-    cmd  = ["rsync", "-avz", "--progress", "-e", ssh_cmd,
+    # --inplace:    不用 .tmp + rename，直接写目标文件。修 WSL 9p (drvfs) /
+    #               SMB / NFS 上的 "mkstemp ... Operation not permitted"。
+    # --no-times:   不改 mtime，修 9p/drvfs 的 "failed to set times"。
+    # --no-perms:   不同步 chmod，修 WSL 跨文件系统的 chmod 权限错误。
+    # --no-owner --no-group: 对应 upload.py 里相同处理，保持对称。
+    cmd  = ["rsync", "-avz", "--progress",
+            "--inplace", "--no-times", "--no-perms",
+            "--no-owner", "--no-group",
+            "-e", ssh_cmd,
             src, local_root + "/"]
     print("  $", " ".join(shlex.quote(c) for c in cmd))
     if dry_run:
