@@ -11,13 +11,27 @@ set -euo pipefail
 
 echo "══ pod_setup.sh  @ $(hostname)  $(date -Is) ══"
 
-# ── 环境探测（失败不 exit，只打印提示） ─────────────────────────────
+# ── 环境探测：CUDA toolkit ────────────────────────────────────────
+# nvcc 可能没在 PATH 上（Runpod pytorch:cu128 镜像就是），先在已知位置找
+NVCC=""
 if command -v nvcc >/dev/null 2>&1; then
-  _nvcc_line="$(nvcc --version 2>/dev/null | grep -oE 'release [0-9]+\.[0-9]+' | head -1 || true)"
+  NVCC="$(command -v nvcc)"
+else
+  for _cand in /usr/local/cuda-12.8/bin/nvcc \
+               /usr/local/cuda-12.7/bin/nvcc \
+               /usr/local/cuda-12.6/bin/nvcc \
+               /usr/local/cuda/bin/nvcc \
+               /usr/local/cuda-12/bin/nvcc; do
+    if [ -x "$_cand" ]; then NVCC="$_cand"; break; fi
+  done
+fi
+
+if [ -n "$NVCC" ]; then
+  _nvcc_line="$("$NVCC" --version 2>/dev/null | grep -oE 'release [0-9]+\.[0-9]+' | head -1 || true)"
   _nvcc_maj="$(echo "$_nvcc_line" | grep -oE '[0-9]+' | head -1 || echo 0)"
   _nvcc_min="$(echo "$_nvcc_line" | grep -oE '[0-9]+' | tail -1 || echo 0)"
   _nvcc_ver=$((_nvcc_maj * 100 + _nvcc_min))   # 12.8 → 1208
-  echo "检测到 nvcc: ${_nvcc_maj}.${_nvcc_min}"
+  echo "检测到 nvcc ${_nvcc_maj}.${_nvcc_min}: $NVCC"
   if [ "$_nvcc_ver" -lt 1206 ]; then
     echo "[WARN] nvcc ${_nvcc_maj}.${_nvcc_min} < 12.6；flashinfer 0.6+ 的 Qwen3.5"
     echo "       gdn_prefill_sm90 需要 PTX 12.6+ (fence_proxy_tensormap_generic"
@@ -25,8 +39,13 @@ if command -v nvcc >/dev/null 2>&1; then
     echo "       个 shot 推理时 JIT 编译失败。建议换镜像到 CUDA 12.8 (例如"
     echo "       runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404)。"
   fi
+  # 把 CUDA_HOME 导出路径写进 venv activate，SSH 手动 source 时也能用
+  _cuda_home="$(dirname "$(dirname "$NVCC")")"
+  export CUDA_HOME_CANDIDATE="$_cuda_home"
 else
-  echo "[WARN] 系统里找不到 nvcc。只要求 runtime 的话 OK，但 Qwen3.5 的 JIT 会挂。"
+  echo "[WARN] 系统里找不到 nvcc（PATH 和 /usr/local/cuda* 都没）。"
+  echo "       Qwen3.5-122B 会在第一个 shot 推理时 flashinfer JIT 失败。"
+  echo "       Qwen3-VL-32B 不需要 JIT，可以继续。"
 fi
 
 # 1) 系统依赖
@@ -140,6 +159,28 @@ echo "$MODEL_DIR" > /tmp/.pod_setup_model_dir
 # 6) 把 venv 激活写进 bashrc（方便用户 ssh 进 pod 后直接跑 python）
 if ! grep -q "labeling-env/bin/activate" ~/.bashrc 2>/dev/null; then
   echo "source $VENV/bin/activate" >> ~/.bashrc
+fi
+
+# 7) 把 CUDA PATH 写进 venv activate —— 手动 SSH + source activate 时也能跑 nvcc
+if [ -n "${CUDA_HOME_CANDIDATE:-}" ] && \
+   ! grep -q 'video_pipeline CUDA block' "$VENV/bin/activate" 2>/dev/null; then
+cat >> "$VENV/bin/activate" <<EOF
+
+# ── video_pipeline CUDA block ───────────────────────────────────────
+# 由 tools/pod_setup.sh 写入；flashinfer JIT 调 nvcc 编译 Qwen3.5 kernel 必需
+if [ -d "$CUDA_HOME_CANDIDATE" ]; then
+  export CUDA_HOME="$CUDA_HOME_CANDIDATE"
+  case ":\$PATH:" in
+    *":\$CUDA_HOME/bin:"*) ;;
+    *) export PATH="\$CUDA_HOME/bin:\$PATH" ;;
+  esac
+  case ":\${LD_LIBRARY_PATH:-}:" in
+    *":\$CUDA_HOME/lib64:"*) ;;
+    *) export LD_LIBRARY_PATH="\$CUDA_HOME/lib64:\${LD_LIBRARY_PATH:-}" ;;
+  esac
+fi
+EOF
+  echo "CUDA env 已写入 $VENV/bin/activate (CUDA_HOME=$CUDA_HOME_CANDIDATE)"
 fi
 
 echo "══ pod_setup 完成 ══"

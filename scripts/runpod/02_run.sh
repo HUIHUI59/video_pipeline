@@ -75,6 +75,19 @@ REMOTE_CMD="set -e; cd '${POD_WS}'; \
   export VLLM_CACHE_ROOT=/workspace/.cache/vllm; \
   export TMPDIR=/workspace/.tmp; \
   mkdir -p \$HF_HOME \$XDG_CACHE_HOME \$TRITON_CACHE_DIR \$VLLM_CACHE_ROOT \$TMPDIR; \
+  # CUDA 工具链 PATH（flashinfer JIT 调 nvcc 编译 MoE/gdn kernel 必需）。
+  # Runpod 的 pytorch:cu128 镜像里 nvcc 在 /usr/local/cuda-12.8/bin，但默认
+  # PATH 不含这个目录，nohup 继承父 shell 的 PATH，所以要在这里显式注入。
+  if   [ -d /usr/local/cuda-12.8 ]; then export CUDA_HOME=/usr/local/cuda-12.8; \
+  elif [ -d /usr/local/cuda ];      then export CUDA_HOME=/usr/local/cuda; \
+  elif [ -d /usr/local/cuda-12 ];   then export CUDA_HOME=/usr/local/cuda-12; \
+  else echo '[WARN] 找不到 /usr/local/cuda*；flashinfer JIT 可能失败'; export CUDA_HOME=; \
+  fi; \
+  if [ -n \"\$CUDA_HOME\" ]; then \
+    export PATH=\"\$CUDA_HOME/bin:\$PATH\"; \
+    export LD_LIBRARY_PATH=\"\$CUDA_HOME/lib64:\${LD_LIBRARY_PATH:-}\"; \
+    echo \"  CUDA_HOME=\$CUDA_HOME (nvcc=\$(\$CUDA_HOME/bin/nvcc --version 2>/dev/null | grep -oE 'release [0-9.]+' || echo unknown))\"; \
+  fi; \
   echo \"启动 pod_runner (nohup, using \$VENV_PY)\"; \
   echo \"  HF_HOME=\$HF_HOME\"; \
   echo \"  TRITON_CACHE_DIR=\$TRITON_CACHE_DIR\"; \
@@ -82,6 +95,7 @@ REMOTE_CMD="set -e; cd '${POD_WS}'; \
   nohup env HF_HOME=\"\$HF_HOME\" XDG_CACHE_HOME=\"\$XDG_CACHE_HOME\" \
              TRITON_CACHE_DIR=\"\$TRITON_CACHE_DIR\" VLLM_CACHE_ROOT=\"\$VLLM_CACHE_ROOT\" \
              TMPDIR=\"\$TMPDIR\" \
+             CUDA_HOME=\"\$CUDA_HOME\" PATH=\"\$PATH\" LD_LIBRARY_PATH=\"\$LD_LIBRARY_PATH\" \
              \"\$VENV_PY\" src/runpod/pod_runner.py --config runpod.yaml \
     >> output/pod_runner.stdout 2>&1 & \
   RUNNER_PID=\$!; \
