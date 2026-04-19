@@ -22,7 +22,7 @@ Stage 5 Pod 侧：在 Runpod H100 Pod 里跑。
 """
 
 from __future__ import annotations
-import argparse, base64, io, json, logging, os, signal, sys, time
+import argparse, base64, io, json, logging, os, signal, sys, threading, time
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +40,35 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 log = logging.getLogger("pod_runner")
+
+
+# ── 心跳：长耗时阶段每 N 秒打一行日志，避免 tail 静默焦虑 ──────────
+_HB = {"phase": None, "start": 0.0, "detail": ""}
+_HB_LOCK = threading.Lock()
+_HB_STOP = threading.Event()
+
+
+def _hb_set(phase: str | None, detail: str = "") -> None:
+    """设置当前心跳阶段名。phase=None 停止打印。"""
+    with _HB_LOCK:
+        _HB["phase"] = phase
+        _HB["start"] = time.time() if phase else 0.0
+        _HB["detail"] = detail
+
+
+def _hb_loop(interval: float = 30.0) -> None:
+    """守护线程：阶段非空就每 interval 秒打一行 "[heartbeat] phase...Xs"。"""
+    while not _HB_STOP.wait(interval):
+        with _HB_LOCK:
+            phase = _HB["phase"]
+            start = _HB["start"]
+            detail = _HB["detail"]
+        if phase and start > 0:
+            elapsed = time.time() - start
+            msg = f"[heartbeat] {phase} 进行中... {elapsed:.0f}s"
+            if detail:
+                msg += f" ({detail})"
+            log.info(msg)
 
 
 def _load_config(path: str) -> dict[str, Any]:
@@ -309,6 +338,10 @@ def main() -> int:
     signal.signal(signal.SIGINT, _term)
     signal.signal(signal.SIGTERM, _term)
 
+    # 启动心跳线程：长耗时阶段每 30s 往 log 打一行，tail 永不静默
+    threading.Thread(target=_hb_loop, args=(30.0,),
+                     name="pod_runner_heartbeat", daemon=True).start()
+
     if args.dry_run:
         log.info("[DRY RUN] 跳过模型加载。")
         return 0
@@ -444,8 +477,12 @@ def main() -> int:
             f"  未找到本地 pre-download，vLLM 会从 HF hub 下载到 "
             f"{os.environ.get('HF_HOME')}"
         )
+    log.info("  （vLLM 详细 shard/kernel 日志在 pod_runner.stdout；"
+             "log 这边每 30s 打心跳。Qwen3.5 首次加载需要 ~5 min 冷读 NV）")
     t0 = time.time()
+    _hb_set("加载模型权重 (vLLM LLM init)", detail="看 stdout 有 shard 进度条")
     llm = LLM(model=model_load_src, **llm_kwargs)
+    _hb_set(None)
     log.info(f"模型加载完成 ({time.time()-t0:.1f}s)")
 
     if args.dry_run_model_load:
@@ -583,11 +620,26 @@ def main() -> int:
         slug = e.shot_id.replace("/", "__")
 
         try:
+            # 第一个 shot 会包含 flashinfer JIT 编译（Qwen3.5 只）
+            if ok == 0 and bad == 0:
+                log.info(
+                    f"[info] {e.shot_id} 开始 Round 1 推理；若是 Qwen3.5 首次跑，"
+                    f"此处会触发 flashinfer JIT 编译 gdn_prefill_sm90 kernel，"
+                    f"通常 2-4 min（看 stdout 的 ninja/nvcc 输出；心跳每 30s 打一行）"
+                )
+            else:
+                log.info(f"[info] {e.shot_id} 开始 Round 1 推理")
             t1 = time.time()
+            _hb_set(f"{e.shot_id} Round 1 推理",
+                    detail=f"n_frames={n_frames} category={e.shot_category}")
             res_r1 = llm.chat(messages_r1, sampling_r1, use_tqdm=False)
+            _hb_set(None)
             raw_r1 = res_r1[0].outputs[0].text
             infer_ms_r1 = int((time.time() - t1) * 1000)
+            log.info(f"[info] {e.shot_id} Round 1 完成 ({infer_ms_r1}ms, "
+                     f"{len(raw_r1)} chars)")
         except Exception as ex:
+            _hb_set(None)
             log.error(f"[ERR] Round1 推理失败 {e.shot_id}: {ex}")
             bad += 1
             continue
@@ -639,11 +691,19 @@ def main() -> int:
                 ]},
             ]
             try:
+                log.info(f"[info] {e.shot_id} 开始 Round 2 推理 "
+                         f"({n_persons} 个 person 的 face_analysis)")
                 t2 = time.time()
+                _hb_set(f"{e.shot_id} Round 2 推理",
+                        detail=f"{n_persons} persons")
                 res_r2 = llm.chat(messages_r2, sampling_r2, use_tqdm=False)
+                _hb_set(None)
                 raw_r2 = res_r2[0].outputs[0].text
                 infer_ms_r2 = int((time.time() - t2) * 1000)
+                log.info(f"[info] {e.shot_id} Round 2 完成 ({infer_ms_r2}ms, "
+                         f"{len(raw_r2)} chars)")
             except Exception as ex:
+                _hb_set(None)
                 log.warning(f"[warn] Round2 face 推理失败 {e.shot_id}: {ex}"
                             f"（保留 Round1 结果，face_analysis=null）")
                 raw_r2 = ""

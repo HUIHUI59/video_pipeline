@@ -102,8 +102,12 @@ REMOTE_CMD="set -e; cd '${POD_WS}'; \
   echo 'runner pid ='\$RUNNER_PID; \
   sleep 5; \
   if kill -0 \$RUNNER_PID 2>/dev/null; then \
-    echo 'runner 还活着。tail -f log (Ctrl+C 退出 tail 不杀 runner)'; \
-    if [ -f output/pod_runner.log ]; then \
+    echo 'runner 还活着。tail -f 同时跟两个文件（log = python logger/心跳，stdout = vLLM 内部进度条 + ninja/nvcc JIT 输出）。Ctrl+C 退出 tail 不杀 runner。'; \
+    # 等 log 至少出现一次（通常 <2 秒），否则先 tail stdout 顶一会儿
+    for _i in 1 2 3 4 5; do [ -f output/pod_runner.log ] && break; sleep 1; done; \
+    if [ -f output/pod_runner.log ] && [ -f output/pod_runner.stdout ]; then \
+      tail -n +1 -f output/pod_runner.log output/pod_runner.stdout; \
+    elif [ -f output/pod_runner.log ]; then \
       tail -f output/pod_runner.log; \
     else \
       echo '(pod_runner.log 还没创建，tail stdout 代替)'; \
