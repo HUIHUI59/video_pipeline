@@ -11,24 +11,64 @@ set -euo pipefail
 
 echo "══ pod_setup.sh  @ $(hostname)  $(date -Is) ══"
 
+# ── 环境探测（失败不 exit，只打印提示） ─────────────────────────────
+if command -v nvcc >/dev/null 2>&1; then
+  _nvcc_line="$(nvcc --version 2>/dev/null | grep -oE 'release [0-9]+\.[0-9]+' | head -1 || true)"
+  _nvcc_maj="$(echo "$_nvcc_line" | grep -oE '[0-9]+' | head -1 || echo 0)"
+  _nvcc_min="$(echo "$_nvcc_line" | grep -oE '[0-9]+' | tail -1 || echo 0)"
+  _nvcc_ver=$((_nvcc_maj * 100 + _nvcc_min))   # 12.8 → 1208
+  echo "检测到 nvcc: ${_nvcc_maj}.${_nvcc_min}"
+  if [ "$_nvcc_ver" -lt 1206 ]; then
+    echo "[WARN] nvcc ${_nvcc_maj}.${_nvcc_min} < 12.6；flashinfer 0.6+ 的 Qwen3.5"
+    echo "       gdn_prefill_sm90 需要 PTX 12.6+ (fence_proxy_tensormap_generic"
+    echo "       等新 intrinsics)。Qwen3-VL-32B 不受影响；Qwen3.5-122B 会在第一"
+    echo "       个 shot 推理时 JIT 编译失败。建议换镜像到 CUDA 12.8 (例如"
+    echo "       runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404)。"
+  fi
+else
+  echo "[WARN] 系统里找不到 nvcc。只要求 runtime 的话 OK，但 Qwen3.5 的 JIT 会挂。"
+fi
+
 # 1) 系统依赖
 # ninja-build：flashinfer JIT 编译 kernel 必需（Qwen3.5 的 gdn_linear_attn
 # 在 vLLM 里没预编译，运行时动态构建）。不装会在第一个 shot 推理时崩：
 #   FileNotFoundError: [Errno 2] No such file or directory: 'ninja'
+# python3.11 + venv/dev：decord PyPI 最新 0.6.0 只有 cp36-cp311 轮子，Python
+#   3.12（Ubuntu 24.04 默认）上 pip install 会失败。固定用 3.11 最稳。
 apt-get update -qq
-apt-get install -y -qq ffmpeg git rsync python3-venv ninja-build
+apt-get install -y -qq ffmpeg git rsync ninja-build \
+    python3.11 python3.11-venv python3.11-dev \
+    python3-venv || {
+  # 极少数镜像 universe 里没 python3.11（如 Ubuntu 20.04 以前），降级用系统 python3
+  echo "[warn] 装 python3.11 失败，回退系统 python3 $(python3 --version 2>&1)"
+  apt-get install -y -qq ffmpeg git rsync ninja-build python3-venv
+}
 
-# 2) Python venv（不污染系统 python）
+# 2) Python 解释器选择：优先 python3.11（decord 有官方 whl）
+if command -v python3.11 >/dev/null 2>&1; then
+  PYTHON=python3.11
+else
+  PYTHON=python3
+  _sys_py_ver="$($PYTHON -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+  if [ "$_sys_py_ver" = "3.12" ] || [ "$_sys_py_ver" = "3.13" ]; then
+    echo "[WARN] 系统 python 是 $_sys_py_ver；decord PyPI 没有 cp312/cp313 轮子，"
+    echo "       可能要现场编译（需要 ffmpeg-dev 等），风险高。"
+  fi
+fi
+echo "使用 Python 解释器: $($PYTHON --version 2>&1)"
+
+# 3) Python venv（不污染系统 python）
 VENV=/opt/labeling-env
 if [ ! -d "$VENV" ]; then
-  python3 -m venv "$VENV"
+  $PYTHON -m venv "$VENV"
 fi
 # shellcheck disable=SC1091
 source "$VENV/bin/activate"
+echo "venv python: $(python --version 2>&1) @ $(which python)"
 
 python -m pip install --upgrade pip wheel
 
-# 3) 依赖（vllm 自带 torch，固定最低版本）
+# 4) 依赖（vllm 自带 torch，固定最低版本）
 pip install \
     "vllm>=0.6.3" \
     "torch>=2.4" \
@@ -39,7 +79,7 @@ pip install \
     "rich" \
     "huggingface_hub[cli]>=0.24"
 
-# 4) 模型下载 —— 默认去 Network Volume（/workspace/models/...）
+# 5) 模型下载 —— 默认去 Network Volume（/workspace/models/...）
 # 为什么改默认：容器盘通常 50-80 GB，装完 vLLM+torch 依赖 ~16 GB 后只剩 ~64 GB；
 # 32B/122B-AWQ 权重 67-68 GB 正好踩过门槛（加 10 GB headroom 共需 77-78 GB），
 # 实测会报"剩余 65GB < 77GB"。Network Volume 100-500 GB 常见，模型持久化，下次
@@ -97,7 +137,7 @@ echo "模型就位: $MODEL_DIR"
 # 写一个标记文件，便于 ssh 进 Pod 查看当前使用的模型路径
 echo "$MODEL_DIR" > /tmp/.pod_setup_model_dir
 
-# 5) 把 venv 激活写进 bashrc（方便用户 ssh 进 pod 后直接跑 python）
+# 6) 把 venv 激活写进 bashrc（方便用户 ssh 进 pod 后直接跑 python）
 if ! grep -q "labeling-env/bin/activate" ~/.bashrc 2>/dev/null; then
   echo "source $VENV/bin/activate" >> ~/.bashrc
 fi
