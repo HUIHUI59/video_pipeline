@@ -12,8 +12,11 @@ set -euo pipefail
 echo "══ pod_setup.sh  @ $(hostname)  $(date -Is) ══"
 
 # 1) 系统依赖
+# ninja-build：flashinfer JIT 编译 kernel 必需（Qwen3.5 的 gdn_linear_attn
+# 在 vLLM 里没预编译，运行时动态构建）。不装会在第一个 shot 推理时崩：
+#   FileNotFoundError: [Errno 2] No such file or directory: 'ninja'
 apt-get update -qq
-apt-get install -y -qq ffmpeg git rsync python3-venv
+apt-get install -y -qq ffmpeg git rsync python3-venv ninja-build
 
 # 2) Python venv（不污染系统 python）
 VENV=/opt/labeling-env
