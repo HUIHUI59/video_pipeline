@@ -1,9 +1,11 @@
 # ═══════════════════════════════════════════════════════════════
-# Runpod Stage 5 标注配置（122B Qwen3.5 AWQ-INT4 模板）
+# Runpod Stage 5 标注配置（122B Qwen3.5 GPTQ-Int4 模板）
 #
-# 模型：Qwen/Qwen3.5-122B-A10B-Instruct-AWQ
+# 模型：Qwen/Qwen3.5-122B-A10B-GPTQ-Int4
 #   - MoE 256 experts，total 122B / active 10B
-#   - AWQ INT4 权重 ~68 GB
+#   - GPTQ INT4 权重 ~68 GB（官方 Qwen 发布的唯一 INT4 量化；
+#     没有官方 AWQ。社区 AWQ 存在但格式碎，优先用官方 GPTQ）
+#   - vLLM 加载用 moe_wna16 kernel（MoE 专用 weight-only 4bit）
 #   - 推理速度接近 10B dense（每 token 只激活约 10B 参数）
 #
 # GPU 推荐：
@@ -29,12 +31,12 @@ paths:
   pod_workspace:      /workspace/labeling_122b               # Pod 端工作目录（≥300 GB 磁盘）
 
 model:
-  name: Qwen/Qwen3.5-122B-A10B-Instruct-AWQ
-  # AWQ INT4 模型：precision 走 awq，quantization 传 awq_marlin 给 vLLM
-  precision: awq
-  quantization: awq_marlin    # vLLM 0.6.3+ 推荐 kernel；不可留 null
+  name: Qwen/Qwen3.5-122B-A10B-GPTQ-Int4
+  # GPTQ INT4 MoE：vLLM 推荐用 moe_wna16 kernel（MoE 专用 weight-only 4bit）
+  precision: gptq-int4
+  quantization: moe_wna16     # 不可留 null；MoE 用 moe_wna16，dense 用 gptq_marlin
   # 本地预下载可以省掉 ~68 GB HF hub 下载（一次下，后续冷启动 30s vs 10min+）
-  path: null                  # 例如：/workspace/models/qwen3.5-122b-a10b-awq
+  path: null                  # 例如：/workspace/models/qwen3.5-122b-a10b-gptq-int4
   # 16K 给 KV cache 留约 5-10 GB（80GB H100）或 30 GB（H200）；
   # 想要 32K/64K 必须上 H200 或 TP=2
   max_model_len: 16384
