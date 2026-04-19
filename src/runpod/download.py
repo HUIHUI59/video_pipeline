@@ -33,10 +33,26 @@ def _load_config(path: str) -> dict[str, Any]:
         return yaml.safe_load(f)
 
 
+def _known_hosts_path() -> str:
+    """项目专用 known_hosts，避免污染用户 ~/.ssh/known_hosts。"""
+    ssh_dir = Path.home() / ".ssh"
+    ssh_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        os.chmod(ssh_dir, 0o700)
+    except OSError:
+        pass
+    kh = ssh_dir / "video_pipeline_known_hosts"
+    if not kh.exists():
+        kh.touch(mode=0o600)
+    return str(kh)
+
+
 def _ssh_opts(pod: dict[str, Any]) -> list[str]:
+    """SSH 选项：accept-new TOFU + 项目独立 known_hosts，可抵御 MITM。"""
     return ["-i", os.path.expanduser(pod["ssh_key"]),
             "-p", str(pod["port"]),
-            "-o", "StrictHostKeyChecking=no",
+            "-o", "StrictHostKeyChecking=accept-new",
+            "-o", f"UserKnownHostsFile={_known_hosts_path()}",
             "-o", "ConnectTimeout=10"]
 
 

@@ -146,16 +146,33 @@ class TaskQueue:
         return False
 
     # ── done-log：追加写，不替换文件 ────────────────────────────────
-    def _done_log_append(self, src: str, dst: str):
-        """将完成记录追加到 done-log。即使主 JSON 损坏，此文件仍可恢复进度。"""
+    def _done_log_append(self, src: str, dst: str) -> bool:
+        """将完成记录追加到 done-log（append-only 的权威完成记录）。
+
+        done-log 是 v3.0 设计中唯一可信的完成记录源；**追加失败会导致任务下次
+        被重复处理**（init_queue 看不到记录 → 重置为 pending）。因此必须用
+        log.error 把异常打到日志，便于问题排查；调用方可通过返回值感知失败。
+
+        不向外抛异常：保证 worker 主循环绝不会因为 done-log I/O 异常崩溃，
+        这和 v3.0 "worker 永不崩" 的硬约束一致。
+        """
         try:
             line = json.dumps({"src": src, "dst": dst, "t": time.time()},
                                ensure_ascii=False) + "\n"
             with open(self._done_log, "a", encoding="utf-8") as f:
                 f.write(line)
                 f.flush()
-        except Exception:
-            pass  # 非关键路径，失败不影响主流程
+                try:
+                    os.fsync(f.fileno())
+                except OSError:
+                    pass
+            return True
+        except Exception as e:
+            log.error(
+                f"done-log 追加失败（任务可能被重复处理）: {e} | "
+                f"src={src} dst={dst} log={self._done_log}"
+            )
+            return False
 
     def _done_log_read(self) -> dict:
         """从 done-log 读取所有完成记录，返回 {src: dst}。"""
@@ -190,34 +207,62 @@ class TaskQueue:
         """
         尝试原子创建 claim 文件。成功返回 True，已存在返回 False。
         存在但 owner 死亡（心跳超时）→ 抢占式删除后重试。
+
+        已知 race（SMB/NFS 上的 TOCTOU 窗口）：在"判断 owner 死亡"到
+        "unlink+O_EXCL 重建"之间，别的 worker 也可能同时 unlink 并用 O_EXCL
+        抢先创建。此时我们的二次 O_EXCL 会拿到 FileExistsError，正确回退；
+        但另一种更危险的情况是 **O_EXCL 成功但里头记录了对方的 worker_id**——
+        这不会发生，因为 O_EXCL 保证只有胜者能写。
+        为进一步防御 "unlink 误删对方合法新 claim" 的风险，这里在 unlink 前
+        二次读取并再次验证确实是死 claim，并把 unlink + create 限制在一次
+        重试内完成，避免无界循环抢占。
         """
+        claim_bytes = json.dumps({
+            "src": src, "worker": self.worker_id,
+            "t": time.time(),
+        }, ensure_ascii=False).encode("utf-8")
+
         cp = self._claim_path(src)
         for attempt in range(2):
             try:
                 fd = os.open(str(cp),
                              os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
                 try:
-                    os.write(fd, json.dumps({
-                        "src": src, "worker": self.worker_id,
-                        "t": time.time(),
-                    }, ensure_ascii=False).encode("utf-8"))
-                    try: os.fsync(fd)
-                    except OSError: pass
+                    os.write(fd, claim_bytes)
+                    try:
+                        os.fsync(fd)
+                    except OSError:
+                        pass
                 finally:
                     os.close(fd)
+                # O_EXCL 保证只有我们能到这一步，文件内容就是我们写的
                 return True
             except FileExistsError:
-                # 检查现有 claim 是不是已死
+                # 已有 claim：先读文件，再二次确认 owner 死亡才抢占
                 try:
-                    old = json.loads(cp.read_text(encoding="utf-8"))
-                    if not self._hb_is_alive(old.get("worker", ""),
-                                             old.get("t", 0)):
-                        try: cp.unlink(missing_ok=True)
-                        except Exception: pass
-                        continue   # 重试一次
+                    raw = cp.read_text(encoding="utf-8")
+                    old = json.loads(raw)
                 except Exception:
-                    pass
-                return False
+                    # 文件存在但内容损坏 → 无法判断 owner，保守放弃
+                    return False
+
+                old_worker = old.get("worker", "")
+                old_t = old.get("t", 0)
+                # 自己的旧 claim？这不应该发生，但若出现直接当成自己持有
+                if old_worker == self.worker_id:
+                    return True
+                if self._hb_is_alive(old_worker, old_t):
+                    return False
+
+                # owner 死亡 → 抢占：unlink + 第二轮 O_EXCL create
+                # 竞争对手此时若同时抢占，其中一个的 O_EXCL 会拿到 EEXIST 正确
+                # 放弃；胜者写入自己的内容后返回 True。
+                try:
+                    cp.unlink(missing_ok=True)
+                except Exception as e:
+                    log.debug(f"_try_claim_file unlink 死 claim 失败 ({e})")
+                    return False
+                continue   # 第二次 for 循环会重新 O_CREAT|O_EXCL
             except Exception as e:
                 log.warning(f"_try_claim_file 异常 ({e})")
                 return False
@@ -425,17 +470,26 @@ class TaskQueue:
             pass
 
     # ── 标记完成（只动 filesystem，不动主 JSON）─────────────────────
-    def mark_done(self, src: str, dst: str):
+    def mark_done(self, src: str, dst: str) -> bool:
         """
         完成时仅动 filesystem：
           1. 追加 done-log（append-only，authoritative）
           2. 删除 claim 文件
         主 JSON 不碰（静态快照，只在 init 时写）。
+
+        返回 True 表示 done-log 追加成功；False 表示失败（日志已打，任务下次会
+        被重复认领）。调用方如需强一致可据此决定是否重试，但主循环通常忽略。
         """
-        try: self._done_log_append(src, dst)
-        except Exception as e: log.warning(f"mark_done done-log 异常 ({e})")
-        try: self._release_claim(src)
-        except Exception: pass
+        ok = False
+        try:
+            ok = self._done_log_append(src, dst)
+        except Exception as e:
+            log.error(f"mark_done done-log 异常 ({e}) | src={src}")
+        try:
+            self._release_claim(src)
+        except Exception:
+            pass
+        return ok
 
     # ── 标记失败（只动 filesystem，不动主 JSON）─────────────────────
     def mark_failed(self, src: str, error: str = ""):

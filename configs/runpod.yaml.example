@@ -1,7 +1,14 @@
 # ═══════════════════════════════════════════════════════════════
-# Runpod Stage 5 标注配置（模板）
+# Runpod Stage 5 标注配置（32B 默认模板）
 # 拷贝到 configs/runpod.yaml 后填入真实 Pod 信息
 # 真实 runpod.yaml 已在 .gitignore 里，不会误提交
+#
+# 切换模型：
+#   - 32B Qwen3-VL（当前文件）：1× H100 80GB 即可跑
+#   - 122B Qwen3.5-AWQ：参考 configs/runpod.122b.yaml.example
+# 调用：
+#   python -m src.runpod.upload --config configs/runpod.yaml         # 32B
+#   python -m src.runpod.upload --config configs/runpod.122b.yaml    # 122B
 # ═══════════════════════════════════════════════════════════════
 
 pod:
@@ -18,11 +25,20 @@ paths:
 
 model:
   name: Qwen/Qwen3-VL-32B-Instruct
-  precision: bf16            # bf16 (~66.7 GB，H100 80G OK) | fp8 (~35 GB)
+  precision: bf16            # bf16 (~66.7 GB，H100 80G OK) | fp8 (~35 GB) | awq | awq_marlin | gptq-int4
+  # 仅 AWQ / GPTQ 需要；bf16/fp8 留 null（vLLM 自动推导）
+  quantization: null
+  # 本地预下载路径（可选）；为 null 时 vLLM 走 HuggingFace hub
+  path: null
   # Qwen3-VL-32B 原生 max_seq_len=262144（会要求 64GB KV cache，H100 80G 装不下）。
   # 我们单 shot 实际用量 ~16K token 就够：system~800 + user~1600 + 8帧×1500 + out 2048
   max_model_len: 16384
   gpu_memory_utilization: 0.9   # vLLM 可用的显存比例。bf16 用到 0.9 较稳；fp8 可以调到 0.95
+  # 每次 chat 允许的图片上限（32B 可 16；122B 建议 8 以节省 KV）
+  limit_mm_per_prompt:
+    image: 16
+  # 多卡推理（32B 单卡足够；122B 有时要 2）。设 1 = 单卡
+  tensor_parallel_size: 1
 
 filters:
   shot_categories: [single, dominant]   # 先只跑人物特写；改成 [] 则不过滤

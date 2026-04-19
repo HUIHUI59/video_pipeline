@@ -1,0 +1,64 @@
+# ═══════════════════════════════════════════════════════════════
+# Runpod Stage 5 标注配置（122B Qwen3.5 AWQ-INT4 模板）
+#
+# 模型：Qwen/Qwen3.5-122B-A10B-Instruct-AWQ
+#   - MoE 256 experts，total 122B / active 10B
+#   - AWQ INT4 权重 ~68 GB
+#   - 推理速度接近 10B dense（每 token 只激活约 10B 参数）
+#
+# GPU 推荐：
+#   - 单卡 H200 141GB（舒适）：weights 68G + KV 30G + 缓冲 40G
+#   - 单卡 H100 80GB（紧）：必须 max_model_len=16384 + image=8 + util=0.92
+#   - 2× A100 80GB TP=2（稳）：tensor_parallel_size: 2
+#
+# 调用（和 32B 配置并存，命令行切 --config）：
+#   python -m src.runpod.upload --config configs/runpod.122b.yaml
+#   python -m src.runpod.download --config configs/runpod.122b.yaml
+# ═══════════════════════════════════════════════════════════════
+
+pod:
+  host: <your-pod-ip>         # Runpod Pod 公网 IP
+  port: 22100                 # Pod SSH 端口
+  user: root                  # Runpod 默认用户 root
+  ssh_key: ~/.ssh/id_ed25519  # 添加到 Runpod 账号的 SSH 私钥
+
+paths:
+  local_clips_root:   /mnt/movies/Films/output/clips
+  local_labels_root:  /mnt/movies/Films/output/labels_122b   # 和 32B 结果分开存
+  local_manifest_dir: /mnt/movies/Films/output/manifest
+  pod_workspace:      /workspace/labeling_122b               # Pod 端工作目录（≥300 GB 磁盘）
+
+model:
+  name: Qwen/Qwen3.5-122B-A10B-Instruct-AWQ
+  # AWQ INT4 模型：precision 走 awq，quantization 传 awq_marlin 给 vLLM
+  precision: awq
+  quantization: awq_marlin    # vLLM 0.6.3+ 推荐 kernel；不可留 null
+  # 本地预下载可以省掉 ~68 GB HF hub 下载（一次下，后续冷启动 30s vs 10min+）
+  path: null                  # 例如：/workspace/models/qwen3.5-122b-a10b-awq
+  # 16K 给 KV cache 留约 5-10 GB（80GB H100）或 30 GB（H200）；
+  # 想要 32K/64K 必须上 H200 或 TP=2
+  max_model_len: 16384
+  # 权重 68G on 80G → 0.92 ≈ 73.6G 可用，KV 窗 ~5.6 GB；H200 可到 0.95
+  gpu_memory_utilization: 0.92
+  # 单请求图片上限：122B KV 比 32B 贵，先 8（8 图 × 1500 token ≈ 12K input）
+  limit_mm_per_prompt:
+    image: 8
+  # 单卡 H100/H200 → 1；租 2× A100 或 2× H100 做 TP → 2
+  tensor_parallel_size: 1
+
+filters:
+  shot_categories: [single, dominant]   # 先只跑人物特写
+  movies: []                            # [] = 所有电影
+  max_shots: null                       # 调试时填数字
+
+sampling:
+  temperature:           0.2
+  top_p:                 0.9
+  # 两轮推理 output 预算；122B 输出风格接近 32B，沿用 10240
+  max_tokens_round1:     10240
+  max_tokens_round2:     10240
+  max_tokens:            10240
+  repetition_penalty:    1.05
+  frames_single_dominant: 8
+  frames_multi_wide:      4
+  resize_shortest:        448

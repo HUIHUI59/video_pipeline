@@ -105,12 +105,53 @@ vim configs/runpod.yaml
 | `paths.local_manifest_dir` | Stage 4 的 manifest 目录 |
 | `paths.local_labels_root` | Stage 5 结果本地落地位置 |
 | `paths.pod_workspace` | Pod 里的工作目录，一般 `/workspace/labeling`（挂在 Network Volume 上） |
-| `model.name` | `Qwen/Qwen3-VL-32B-Instruct` |
-| `model.precision` | `bf16` (推荐) 或 `fp8` (省显存) |
+| `model.name` | 32B：`Qwen/Qwen3-VL-32B-Instruct`；122B：`Qwen/Qwen3.5-122B-A10B-Instruct-AWQ` |
+| `model.precision` | `bf16` (32B 推荐) / `fp8` (省显存) / `awq` / `awq_marlin` / `gptq-int4` (量化模型) |
+| `model.quantization` | 量化模型必填，传给 vLLM（如 `awq_marlin`）；bf16/fp8 留 `null` |
+| `model.limit_mm_per_prompt.image` | 单次 chat 最多图数，32B 可 16，122B 建议 8 |
+| `model.tensor_parallel_size` | `1` = 单卡；多卡 TP（122B 有时要 2）设 `>1` |
 | `filters.shot_categories` | `[single, dominant]` 只标人物特写；`[]` = 全部除 landscape |
 | `filters.movies` | `[]` = 全部；或 `[MovieA, MovieB]` |
 | `filters.max_shots` | `null` = 全量；数字可限量调试 |
-| `sampling.*` | temperature 0.2、top_p 0.9、max_tokens 2048、repetition_penalty 1.05 |
+| `sampling.*` | temperature 0.2、top_p 0.9、max_tokens_round1/round2 10240、repetition_penalty 1.05 |
+
+## 模型与 GPU 选型
+
+项目同时支持两种 VLM；命令行 `--config` 切换：
+
+```bash
+# 32B 默认
+python -m src.runpod.upload --config configs/runpod.yaml
+python -m src.runpod.pod_runner --config runpod.yaml
+
+# 122B AWQ 主力
+python -m src.runpod.upload --config configs/runpod.122b.yaml
+python -m src.runpod.pod_runner --config runpod.122b.yaml
+```
+
+### GPU 租用矩阵（Runpod 2026-04 行情参考）
+
+| 模型 | 权重 | 最低 GPU | 推荐 GPU | 备注 |
+|---|---|---|---|---|
+| **Qwen3-VL-32B BF16** (默认) | ~64 GB | 1× H100 80GB | 1× H200 141GB | `max_model_len=16384` 留 ~12 GB KV |
+| **Qwen3-VL-32B FP8** | ~35 GB | 1× L40S 48GB | 1× H100 80GB | 质量接近 BF16，显存对半 |
+| **Qwen3.5-122B-A10B AWQ-INT4** | ~68 GB | 1× H100 80GB（紧） | 1× H200 141GB **或** 2× A100 80GB TP=2 | MoE 总 122B 驻留；active 10B，单 token 比 dense 32B 更快 |
+| **Qwen3.5-122B-A10B FP8** | ~122 GB | 2× H100 80GB TP=2 | 2× H200 141GB | 不推荐；AWQ 已够 |
+| **Qwen3.5-122B-A10B BF16** | ~234 GB | 3× H100 80GB TP=3 | 4× H100 80GB | 仅作参考 |
+
+**122B AWQ 在 80GB H100 上注意事项**：
+- `max_model_len=16384` + `limit_mm_per_prompt.image=8` 是上限，想要 16 图必须上 H200 或 TP=2
+- `gpu_memory_utilization=0.92` 给 KV cache 留约 6 GB（80×0.92 − 68）
+- MoE 256 experts 全驻留，所以权重按 122B 计算；但每 token 只激活约 10B，吞吐接近 dense 10B
+
+### 租到 Pod 后快速验证显存
+
+```bash
+# 加载模型后立刻退出，打印实际显存占用。不花推理钱。
+ssh pod "python src/runpod/pod_runner.py --config runpod.122b.yaml --dry-run-model-load"
+```
+
+输出类似 `加载完成后显存 72.34 GB`，可立即判断"是否挤得下 KV"。
 
 ## 运行步骤
 
@@ -160,8 +201,9 @@ bash scripts/runpod/run_all.sh
    - 删除 action 字段里泄漏的镜头术语（`close-up, wide, handheld, ...` 等 30+ 条）
    - intensity / tone 归轴（例：从 action_primary 移到 action_quality.intensity）
 3. **Pydantic 结构校验** — `src/runpod/schemas.py::ShotLabel.model_validate(obj)` 确保类型 / 字段 / 枚举符合
-4. **业务校验（14 项）** — `validate_body_analysis.py::ShotValidator.validate(obj)`
-   - 镜头术语泄漏、action_primary 不在 taxonomy、null 规则不一致、caption 字数超纲、跨字段矛盾…… 合计 14 类
+4. **业务校验（16 项）** — `validate_body_analysis.py::ShotValidator.validate(obj)`
+   - 镜头术语泄漏、action_primary 不在 taxonomy、null 规则不一致、caption 字数超纲、跨字段矛盾、
+     顶层 interaction 自洽（solo → contact=none）、跨人 interaction 对称性…… 合计 16 类
    - `errors=0` 才合格；warnings 允许（只记日志）
 
 任何一步失败都把 raw 输出扔进 `output/_failed/<slug>.raw.txt` + `<slug>.errors.json`，**不**追加到 `.checkpoint.jsonl`——下次重启会再试。

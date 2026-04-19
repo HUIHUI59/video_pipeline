@@ -23,11 +23,25 @@ Stage 4：镜头预分类
 ════════════════════════════════════════════════════════════════
 """
 
-import os, sys, time, signal, socket, atexit, json, statistics
-import logging, argparse, threading, subprocess
+import argparse
+import atexit
 import concurrent.futures
-from pathlib import Path
+import json
+import logging
+import os
+import signal
+import socket
+import statistics  # noqa: F401 — kept for potential external use in run_queue extension
+import subprocess
+import sys
+import threading
+import time
 from dataclasses import dataclass, field
+from pathlib import Path
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from common.task_queue import TaskQueue
 
 from rich.console import Console
 from rich.progress import (
@@ -56,11 +70,22 @@ DEFAULT_SINGLE_RATIO   = 0.15               # 脸框占帧面积 ≥15% 视为 c
 DEFAULT_WIDE_RATIO     = 0.03               # 脸框占帧面积 ≤3% 视为 wide
 DEFAULT_SAMPLE_FRACS   = (0.15, 0.30, 0.50, 0.70, 0.85)   # 5 帧，避开首尾过渡
 
-# 画质阈值（灰度 0-255）
-QUALITY_MIN_BRIGHTNESS  = 25.0   # 均值 < 25 → too_dark
-QUALITY_MAX_BRIGHTNESS  = 230.0  # 均值 > 230 → too_bright
-QUALITY_MIN_CONTRAST    = 15.0   # 标准差 < 15 → low_contrast
-QUALITY_MIN_SHARPNESS   = 50.0   # Laplacian 方差 < 50 → blurry
+# 画质阈值（灰度 0-255）—— 默认"严格模式"（偏安全，历史行为）
+# delivery_v1 规范默认值（更宽松）：12 / 242 / 5 / 15
+# 通过 --quality-config YAML 或 --brightness-min / --brightness-max /
+# --contrast-min / --sharpness-min CLI flag 覆盖。
+QUALITY_MIN_BRIGHTNESS  = 25.0   # 均值 < 该值 → too_dark
+QUALITY_MAX_BRIGHTNESS  = 230.0  # 均值 > 该值 → too_bright
+QUALITY_MIN_CONTRAST    = 15.0   # 标准差 < 该值 → low_contrast
+QUALITY_MIN_SHARPNESS   = 50.0   # Laplacian 方差 < 该值 → blurry
+
+# 规范模式快捷值（--quality-mode spec 会应用这四个）
+QUALITY_SPEC_MODE = {
+    "min_brightness": 12.0,
+    "max_brightness": 242.0,
+    "min_contrast":    5.0,
+    "min_sharpness":  15.0,
+}
 
 # ══════════════════════════════════════════════════════════════
 # 日志
@@ -182,7 +207,8 @@ def detect_faces(frame) -> tuple[int, list[float]]:
         return 0, []
 
     if backend == "yolo_face":
-        return _detect_boxes(det, frame, DEFAULT_FACE_CONF, class_filter=None)
+        n, r, _bb = _detect_boxes(det, frame, DEFAULT_FACE_CONF, class_filter=None)
+        return n, r
 
     if backend == "haar":
         try:
@@ -238,43 +264,52 @@ def _compute_quality(frame) -> dict:
 
 def _detect_boxes(yolo_model, frame, conf: float, class_filter=None):
     """
-    返回 (count, ratios) — 每帧检测框个数 + 每个框面积占比列表。
-    模型为 None 时返回 (0, [])。
+    返回 (count, ratios, bboxes_norm) —
+      - count：检测框个数
+      - ratios：每个框面积占整帧比例
+      - bboxes_norm：每个框 [x1, y1, x2, y2] 归一化到 [0, 1]（除以帧宽/高）
+    模型为 None 或检测失败时返回 (0, [], [])。
     """
     if yolo_model is None:
-        return 0, []
+        return 0, [], []
     try:
         if class_filter is not None:
             det = yolo_model(frame, conf=conf, classes=class_filter, verbose=False)
         else:
             det = yolo_model(frame, conf=conf, verbose=False)
     except Exception:
-        return 0, []
+        return 0, [], []
     if not det:
-        return 0, []
+        return 0, [], []
     boxes = det[0].boxes
     if boxes is None or len(boxes) == 0:
-        return 0, []
-    import numpy as np
+        return 0, [], []
     xyxy = boxes.xyxy.cpu().numpy()
     h, w = frame.shape[:2]
     area = max(w * h, 1)
     ratios = ((xyxy[:, 2] - xyxy[:, 0]) * (xyxy[:, 3] - xyxy[:, 1]) / area).tolist()
-    return len(boxes), ratios
+    hh = float(max(h, 1)); ww = float(max(w, 1))
+    bboxes_norm = [
+        [float(row[0] / ww), float(row[1] / hh),
+         float(row[2] / ww), float(row[3] / hh)]
+        for row in xyxy
+    ]
+    return len(boxes), ratios, bboxes_norm
 
 # ══════════════════════════════════════════════════════════════
 # 单任务：分类一个 clip
 # ══════════════════════════════════════════════════════════════
 
 def classify_one(src: str, manifest_dir: str,
-                 model_path: str        = DEFAULT_MODEL,
-                 face_model_path: str   = DEFAULT_FACE_MODEL,
-                 person_conf: float     = DEFAULT_PERSON_CONF,
-                 face_conf: float       = DEFAULT_FACE_CONF,
-                 single_ratio: float    = DEFAULT_SINGLE_RATIO,
-                 wide_ratio: float      = DEFAULT_WIDE_RATIO,
-                 sample_fracs: tuple    = DEFAULT_SAMPLE_FRACS,
-                 queue=None) -> ClassifyResult:
+                 model_path: str               = DEFAULT_MODEL,
+                 face_model_path: str          = DEFAULT_FACE_MODEL,
+                 person_conf: float            = DEFAULT_PERSON_CONF,
+                 face_conf: float              = DEFAULT_FACE_CONF,
+                 single_ratio: float           = DEFAULT_SINGLE_RATIO,
+                 wide_ratio: float             = DEFAULT_WIDE_RATIO,
+                 sample_fracs: tuple[float, ...] = DEFAULT_SAMPLE_FRACS,
+                 queue: Optional["TaskQueue"]  = None,
+                 quality_thresholds: Optional[dict[str, float]] = None) -> ClassifyResult:
     """
     对一个 clip 做：
       1. 采多帧，每帧跑人体检测 (yolov8l) + 脸检测 (yolov8n-face) + 画质计算
@@ -302,45 +337,52 @@ def classify_one(src: str, manifest_dir: str,
         res.error = f"无法加载 person 模型 {model_path}"
         if queue: queue.mark_failed(src, res.error)
         return res
-    # 脸检测器初始化（MediaPipe 优先，退化 YOLO face；都失败则 None）
+    # 脸检测器初始化：YOLO face（若本地 .pt 存在）→ OpenCV Haar → none
+    # （MediaPipe 已从项目里移除，保留的是 get_face_detector 里 YOLO > Haar 的顺序）
     get_face_detector(face_model_path)
 
     cap = cv2.VideoCapture(src)
-    if not cap.isOpened():
-        res.error = "无法打开视频"
-        if queue: queue.mark_failed(src, res.error)
-        return res
+    # 用 try/finally 保证任何异常路径都会 release cap，避免 FD 泄漏
+    try:
+        if not cap.isOpened():
+            res.error = "无法打开视频"
+            if queue: queue.mark_failed(src, res.error)
+            return res
 
-    fps         = cap.get(cv2.CAP_PROP_FPS) or 24.0
-    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-    width       = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
-    height      = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
-    duration    = frame_count / fps if fps > 0 else 0.0
+        fps         = cap.get(cv2.CAP_PROP_FPS) or 24.0
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        width       = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+        height      = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+        duration    = frame_count / fps if fps > 0 else 0.0
 
-    if frame_count < 2 or width <= 0 or height <= 0:
-        cap.release()
-        res.error = f"视频元数据异常 frames={frame_count} wh={width}x{height}"
-        if queue: queue.mark_failed(src, res.error)
-        return res
+        if frame_count < 2 or width <= 0 or height <= 0:
+            res.error = f"视频元数据异常 frames={frame_count} wh={width}x{height}"
+            if queue: queue.mark_failed(src, res.error)
+            return res
 
-    # 采样多帧；每帧：person + face + quality
-    per_frame: list[dict] = []  # {"persons":N, "p_ratios":[...],
-                                 #  "faces":N, "f_ratios":[...],
-                                 #  "quality":{mean_brightness,...}}
-    for frac in sample_fracs:
-        idx = max(0, min(frame_count - 1, int(frame_count * frac)))
-        cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-        ok, frame = cap.read()
-        if not ok or frame is None:
-            continue
-        p_n, p_r = _detect_boxes(yolo_person, frame, person_conf, class_filter=[0])
-        f_n, f_r = detect_faces(frame)
-        per_frame.append({
-            "persons":  p_n, "p_ratios": p_r,
-            "faces":    f_n, "f_ratios": f_r,
-            "quality":  _compute_quality(frame),
-        })
-    cap.release()
+        # 采样多帧；每帧：person + face + quality
+        per_frame: list[dict] = []  # {"persons":N, "p_ratios":[...],
+                                     #  "faces":N, "f_ratios":[...],
+                                     #  "quality":{mean_brightness,...}}
+        for frac in sample_fracs:
+            idx = max(0, min(frame_count - 1, int(frame_count * frac)))
+            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+            ok, frame = cap.read()
+            if not ok or frame is None:
+                continue
+            p_n, p_r, p_bb = _detect_boxes(yolo_person, frame,
+                                           person_conf, class_filter=[0])
+            f_n, f_r = detect_faces(frame)
+            per_frame.append({
+                "persons":  p_n, "p_ratios": p_r, "p_bboxes": p_bb,
+                "faces":    f_n, "f_ratios": f_r,
+                "quality":  _compute_quality(frame),
+            })
+    finally:
+        try:
+            cap.release()
+        except Exception:
+            pass
 
     if not per_frame:
         res.error = "未采样到有效帧"
@@ -361,14 +403,28 @@ def classify_one(src: str, manifest_dir: str,
     largest_face_ratio = max(max_f_ratios) if max_f_ratios else 0.0
     avg_face_ratio     = (sum(all_f_ratios) / len(all_f_ratios)) if all_f_ratios else 0.0
 
-    # 人体框比例聚合（作为辅助）
+    # 人体框比例聚合（作为辅助），同时抓跨帧面积最大的 bbox 给 Stage 5
     all_p_ratios: list[float] = []
     max_p_ratios: list[float] = []
+    largest_subject_bbox: Optional[list[float]] = None
+    largest_subject_area_norm: float = 0.0
     for fr in per_frame:
         if fr["p_ratios"]:
             max_p_ratios.append(max(fr["p_ratios"]))
             all_p_ratios.extend(fr["p_ratios"])
+            # 在这一帧里找最大的 person bbox
+            p_ratios_f = fr["p_ratios"]
+            p_bboxes_f = fr.get("p_bboxes") or []
+            if p_bboxes_f and len(p_bboxes_f) == len(p_ratios_f):
+                k = max(range(len(p_ratios_f)), key=lambda i: p_ratios_f[i])
+                if p_ratios_f[k] > largest_subject_area_norm:
+                    largest_subject_area_norm = p_ratios_f[k]
+                    largest_subject_bbox = list(p_bboxes_f[k])
     largest_subject_ratio = max(max_p_ratios) if max_p_ratios else 0.0
+    largest_subject_vertical_center: Optional[float] = (
+        (largest_subject_bbox[1] + largest_subject_bbox[3]) / 2.0
+        if largest_subject_bbox else None
+    )
 
     # 分类（脸优先；无脸模型时降级用人体框）
     if num_persons == 0:
@@ -401,11 +457,18 @@ def classify_one(src: str, manifest_dir: str,
     brightness_std  = sum(q_stds)  / len(q_stds)  if q_stds  else 0.0
     sharpness       = sum(q_shrp)  / len(q_shrp)  if q_shrp  else 0.0
 
+    # 阈值：优先用传入的 dict，缺失项退回模块常量
+    th = quality_thresholds or {}
+    th_min_brightness = float(th.get("min_brightness", QUALITY_MIN_BRIGHTNESS))
+    th_max_brightness = float(th.get("max_brightness", QUALITY_MAX_BRIGHTNESS))
+    th_min_contrast   = float(th.get("min_contrast",   QUALITY_MIN_CONTRAST))
+    th_min_sharpness  = float(th.get("min_sharpness",  QUALITY_MIN_SHARPNESS))
+
     issues: list[str] = []
-    if mean_brightness < QUALITY_MIN_BRIGHTNESS:  issues.append("too_dark")
-    if mean_brightness > QUALITY_MAX_BRIGHTNESS:  issues.append("too_bright")
-    if brightness_std  < QUALITY_MIN_CONTRAST:    issues.append("low_contrast")
-    if sharpness       < QUALITY_MIN_SHARPNESS:   issues.append("blurry")
+    if mean_brightness < th_min_brightness:  issues.append("too_dark")
+    if mean_brightness > th_max_brightness:  issues.append("too_bright")
+    if brightness_std  < th_min_contrast:    issues.append("low_contrast")
+    if sharpness       < th_min_sharpness:   issues.append("blurry")
     quality_ok = len(issues) == 0
 
     # 置信度：跨帧人/脸计数一致性
@@ -438,6 +501,14 @@ def classify_one(src: str, manifest_dir: str,
         "fps":                  round(fps, 3),
         "largest_subject_ratio": round(largest_subject_ratio, 4),
         "largest_face_ratio":   round(largest_face_ratio, 4),
+        "largest_subject_bbox": (
+            [round(v, 4) for v in largest_subject_bbox]
+            if largest_subject_bbox else None
+        ),
+        "largest_subject_vertical_center": (
+            round(largest_subject_vertical_center, 4)
+            if largest_subject_vertical_center is not None else None
+        ),
         "classifier_confidence": confidence,
         "classified_at":        time.time(),
         "quality_ok":           quality_ok,
@@ -487,7 +558,8 @@ def run_queue(queue, manifest_dir: str, workers: int,
               model_path: str, face_model_path: str,
               person_conf: float, face_conf: float,
               single_ratio: float, wide_ratio: float,
-              sample_fracs: tuple, stop_ev):
+              sample_fracs: tuple, stop_ev,
+              quality_thresholds: Optional[dict[str, float]] = None):
     counts  = {"ok": 0, "err": 0, "landscape": 0, "single": 0,
                "dominant": 0, "multi": 0, "wide": 0}
     current = {}
@@ -533,7 +605,8 @@ def run_queue(queue, manifest_dir: str, workers: int,
                                       model_path, face_model_path,
                                       person_conf, face_conf,
                                       single_ratio, wide_ratio,
-                                      sample_fracs, queue)
+                                      sample_fracs, queue,
+                                      quality_thresholds)
                 except Exception as e:
                     log.error(f"submit 异常 ({e})，释放 claim 后重试")
                     try: queue.mark_failed(src, f"submit error: {e}")
@@ -625,7 +698,51 @@ def main():
     parser.add_argument("--pid-file",    type=str, default="")
     parser.add_argument("--queue-dir",   type=str, default="")
     parser.add_argument("--worker-id",   type=str, default="")
+    # ── 画质阈值：YAML 或 CLI 覆盖（不给则用严格模式常量）
+    parser.add_argument("--quality-config", type=str, default="",
+                        help="画质阈值 YAML，键：min_brightness/max_brightness/"
+                             "min_contrast/min_sharpness。优先级低于下面 4 个 CLI flag。")
+    parser.add_argument("--quality-mode", type=str, default="",
+                        choices=["", "strict", "spec"],
+                        help="'spec' = delivery_v1 规范默认值 12/242/5/15；"
+                             "'strict'/空 = 严格模式（25/230/15/50，历史默认）。")
+    parser.add_argument("--brightness-min", type=float, default=None)
+    parser.add_argument("--brightness-max", type=float, default=None)
+    parser.add_argument("--contrast-min",   type=float, default=None)
+    parser.add_argument("--sharpness-min",  type=float, default=None)
     args = parser.parse_args()
+
+    # ── 解析画质阈值：优先级 CLI flag > YAML > --quality-mode > 严格模式常量
+    quality_thresholds: dict[str, float] = {
+        "min_brightness": QUALITY_MIN_BRIGHTNESS,
+        "max_brightness": QUALITY_MAX_BRIGHTNESS,
+        "min_contrast":   QUALITY_MIN_CONTRAST,
+        "min_sharpness":  QUALITY_MIN_SHARPNESS,
+    }
+    if args.quality_mode == "spec":
+        quality_thresholds.update(QUALITY_SPEC_MODE)
+    if args.quality_config:
+        try:
+            import yaml as _yaml
+            cfg_path = Path(os.path.expanduser(args.quality_config))
+            if cfg_path.exists():
+                loaded = _yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+                for k in ("min_brightness", "max_brightness",
+                          "min_contrast", "min_sharpness"):
+                    if k in loaded:
+                        quality_thresholds[k] = float(loaded[k])
+            else:
+                log.warning(f"--quality-config {cfg_path} 不存在，忽略")
+        except Exception as e:
+            log.warning(f"--quality-config 解析失败 ({e})，使用默认")
+    for cli_key, th_key in (("brightness_min", "min_brightness"),
+                            ("brightness_max", "max_brightness"),
+                            ("contrast_min",   "min_contrast"),
+                            ("sharpness_min",  "min_sharpness")):
+        v = getattr(args, cli_key)
+        if v is not None:
+            quality_thresholds[th_key] = float(v)
+    log.info(f"画质阈值：{quality_thresholds}")
 
     if args.pid_file:
         pp = Path(os.path.expanduser(args.pid_file))
@@ -684,7 +801,8 @@ def main():
                           args.model, args.face_model,
                           args.person_conf, args.face_conf,
                           args.single_face_ratio, args.wide_face_ratio,
-                          sample_fracs, stop_ev)
+                          sample_fracs, stop_ev,
+                          quality_thresholds=quality_thresholds)
             console.rule("[bold]分类完成[/bold]")
             console.print(
                 f"  ✅ ok={c['ok']}  ❌ err={c['err']}  |  "
@@ -705,7 +823,8 @@ def main():
                                 args.model, args.face_model,
                                 args.person_conf, args.face_conf,
                                 args.single_face_ratio, args.wide_face_ratio,
-                                sample_fracs): src
+                                sample_fracs, None,
+                                quality_thresholds): src
                     for src in clips}
             for fut in concurrent.futures.as_completed(futs):
                 if stop_ev.is_set():

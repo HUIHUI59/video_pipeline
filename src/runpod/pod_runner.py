@@ -44,7 +44,101 @@ log = logging.getLogger("pod_runner")
 
 def _load_config(path: str) -> dict[str, Any]:
     with open(path, encoding="utf-8") as f:
-        return yaml.safe_load(f)
+        cfg = yaml.safe_load(f)
+    if not isinstance(cfg, dict):
+        raise ValueError(
+            f"runpod config 根对象必须是 dict，实际 type={type(cfg).__name__} "
+            f"path={path}"
+        )
+    return cfg
+
+
+def _require_cfg(cfg: dict[str, Any], *keys: str) -> Any:
+    """按路径取配置，缺失任意一级都抛带完整路径的 ValueError。
+    比裸 `cfg["paths"]["pod_workspace"]` 崩溃时可读。
+    """
+    cur: Any = cfg
+    path_so_far: list[str] = []
+    for k in keys:
+        path_so_far.append(k)
+        if not isinstance(cur, dict):
+            raise ValueError(
+                f"runpod config: 期望 {'/'.join(path_so_far[:-1])} 是 dict，"
+                f"实际 type={type(cur).__name__}"
+            )
+        if k not in cur:
+            raise ValueError(
+                f"runpod config 缺失字段: {'/'.join(path_so_far)}"
+            )
+        cur = cur[k]
+    return cur
+
+
+def _build_llm_kwargs(model_cfg: dict[str, Any]) -> dict[str, Any]:
+    """根据 runpod.yaml 的 model 段组装 vLLM LLM(...) 的 kwargs。
+
+    行为：
+      - precision=bf16/fp8 → dtype=bfloat16/auto；不传 quantization
+      - precision=awq/awq_marlin/gptq-int4 → 不传 dtype（vLLM 自动推），
+        必须同时配置 model.quantization（例如 "awq_marlin"）
+      - tensor_parallel_size>1 → 才传该 kwarg，让 vLLM 默认单卡路径不受影响
+      - limit_mm_per_prompt 从 config 取，默认 {"image": 16}
+    """
+    precision = str(model_cfg.get("precision", "bf16")).lower()
+    kwargs: dict[str, Any] = {
+        "trust_remote_code": True,
+        "max_model_len": int(model_cfg.get("max_model_len", 16384)),
+        "gpu_memory_utilization": float(
+            model_cfg.get("gpu_memory_utilization", 0.9)),
+        "limit_mm_per_prompt":
+            dict(model_cfg.get("limit_mm_per_prompt") or {"image": 16}),
+    }
+
+    if precision in ("bf16", "fp8"):
+        kwargs["dtype"] = {"bf16": "bfloat16", "fp8": "auto"}[precision]
+    else:
+        # AWQ / GPTQ：必须显式指定 vLLM 的量化 kernel
+        qt = model_cfg.get("quantization")
+        if not qt:
+            raise ValueError(
+                f"model.precision={precision} 需要同时配置 "
+                f"model.quantization（例如 awq_marlin / gptq_marlin）。"
+                f"参考 configs/runpod.122b.yaml.example。"
+            )
+        kwargs["quantization"] = qt
+
+    tp = int(model_cfg.get("tensor_parallel_size", 1))
+    if tp > 1:
+        kwargs["tensor_parallel_size"] = tp
+        # TP>1 时 vLLM 需要 CUDA_VISIBLE_DEVICES 至少 tp 张卡；这里只警告不 raise
+        visible = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+        seen = len([x for x in visible.split(",") if x.strip()]) if visible else 0
+        if seen and seen < tp:
+            log.warning(
+                f"tensor_parallel_size={tp} 但 CUDA_VISIBLE_DEVICES 只看到 "
+                f"{seen} 张卡；vLLM 很可能会报错。"
+            )
+    return kwargs
+
+
+def _save_failed(out_root: Path, slug: str, raw_text: str, reason: str,
+                 errors: list | None = None,
+                 warnings: list | None = None) -> None:
+    """把一条失败推理的原始文本 + 错误原因落盘到 output/_failed/。
+    模块顶层函数避免在 for 循环内每次迭代重新定义导致的闭包陷阱。
+    """
+    fail_dir = out_root / "_failed"
+    fail_dir.mkdir(exist_ok=True)
+    try:
+        (fail_dir / f"{slug}.raw.txt").write_text(raw_text, encoding="utf-8")
+        (fail_dir / f"{slug}.errors.json").write_text(
+            json.dumps({"reason": reason,
+                        "errors":   errors or [],
+                        "warnings": warnings or []},
+                       ensure_ascii=False, indent=2),
+            encoding="utf-8")
+    except Exception as e:
+        log.warning(f"_save_failed 写入 {fail_dir}/{slug} 失败: {e}")
 
 
 def _frame_count_for_category(category: str, cfg_sampling: dict[str, Any]) -> int:
@@ -139,13 +233,23 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Stage 5 pod-side runner")
     ap.add_argument("--config",    required=True)
     ap.add_argument("--max-shots", type=int, default=None, help="只跑前 N 个 shot（调试用）")
-    ap.add_argument("--dry-run",   action="store_true", help="只加载模型、不跑推理，用于冒烟测试")
+    ap.add_argument("--dry-run",   action="store_true", help="只校验 config、不加载模型，最快冒烟")
+    ap.add_argument("--dry-run-model-load", action="store_true",
+                    help="加载模型后立刻退出并打印显存占用（租 Pod 后验证 GPU 容量）")
     args = ap.parse_args()
 
-    cfg       = _load_config(args.config)
+    try:
+        cfg = _load_config(args.config)
+    except Exception as e:
+        log.error(f"无法加载 config: {e}")
+        return 1
     workspace = Path(args.config).resolve().parent
-    paths     = cfg["paths"]
-    model_cfg = cfg["model"]
+    try:
+        paths     = _require_cfg(cfg, "paths")
+        model_cfg = _require_cfg(cfg, "model")
+    except ValueError as e:
+        log.error(str(e))
+        return 1
     samp      = cfg.get("sampling", {}) or {}
 
     manifest_path = workspace / "manifest.jsonl"
@@ -230,22 +334,37 @@ def main() -> int:
         log.error(f"delivery_v1 scripts import 失败: {e}")
         return 4
 
-    taxonomy_leaves = load_taxonomy_leaves(tax_path)
-    forbidden_terms = load_forbidden_terms(tax_path)
+    try:
+        taxonomy_leaves = load_taxonomy_leaves(tax_path)
+        forbidden_terms = load_forbidden_terms(tax_path)
+    except Exception as e:
+        log.error(f"读取 taxonomy 失败（{tax_path}）: {e}")
+        return 4
     n_leaves_total = sum(len(v) for v in taxonomy_leaves.values())
     log.info(f"Loaded taxonomy: {len(taxonomy_leaves)} categories, "
              f"{n_leaves_total} leaves; {len(forbidden_terms)} forbidden terms")
 
-    system_prompt = build_system_prompt(taxonomy_leaves, forbidden_terms)
+    try:
+        system_prompt = build_system_prompt(taxonomy_leaves, forbidden_terms)
 
-    user_templates: dict[str, str] = {}
-    for cat in ("single", "dominant", "multi"):
-        examples = load_examples(exa_dir, cat)
-        user_templates[cat] = build_user_prompt(cat, examples)
-        log.info(f"Loaded few-shot: {cat}={len(examples)}")
+        user_templates: dict[str, str] = {}
+        for cat in ("single", "dominant", "multi"):
+            examples = load_examples(exa_dir, cat)
+            user_templates[cat] = build_user_prompt(cat, examples)
+            log.info(f"Loaded few-shot: {cat}={len(examples)}")
+    except Exception as e:
+        log.error(f"构建 prompt 模板失败: {e}")
+        return 4
 
-    normalizer = TagNormalizer(syn_path, tax_path)
-    validator  = ShotValidator(TaxonomyLoader(tax_path), SynonymLoader(syn_path))
+    try:
+        normalizer = TagNormalizer(syn_path, tax_path)
+        validator  = ShotValidator(TaxonomyLoader(tax_path), SynonymLoader(syn_path))
+    except FileNotFoundError as e:
+        log.error(f"delivery_v1 YAML 文件缺失: {e}")
+        return 4
+    except Exception as e:
+        log.error(f"初始化 normalizer/validator 失败: {e}")
+        return 4
     log.info("delivery_v1 集成就绪（system_prompt + normalize + validate）")
 
     # vLLM 版本间 GuidedDecodingParams 的位置几经变动：
@@ -275,50 +394,61 @@ def main() -> int:
         log.info("GuidedDecodingParams 类未找到，改用 dict 形式 guided_decoding=dict(json=schema)")
 
     model_name = model_cfg["name"]
-    precision  = model_cfg.get("precision", "bf16")
-    dtype      = {"bf16": "bfloat16", "fp8": "auto"}.get(precision, "auto")
 
     # 优先用本地 pre-download 的模型路径，避免 vLLM 去 HF hub 再下一份 67GB
     # 顺序很重要：容器盘本地 NVMe（~3-5 GB/s 读） > Network Volume MooseFS（~50 MB/s）
     # 同样 67GB 模型：本地 30s 加载完 vs Network Volume 冷读 22 min
     model_path = model_cfg.get("path")
     if not model_path:
-        slug = model_name.split("/")[-1].lower()  # Qwen3-VL-32B-Instruct → qwen3-vl-32b-instruct
+        slug = model_name.split("/")[-1].lower()   # Qwen/Qwen3-VL-32B-Instruct → qwen3-vl-32b-instruct
         for candidate in (
             # ── 本地容器盘优先 ─────────────────────────────
-            "/root/qwen3-vl-32b",
-            "/root/models/qwen3-vl-32b",
+            f"/root/{slug}",
             f"/root/models/{slug}",
             # ── Network Volume 兜底 ───────────────────────
-            "/workspace/models/qwen3-vl-32b",
             f"/workspace/models/{slug}",
             f"/workspace/models/{model_name.split('/')[-1]}",
+            # ── 兼容老路径（硬编码 qwen3-vl-32b）──────────
+            "/root/qwen3-vl-32b",
+            "/root/models/qwen3-vl-32b",
+            "/workspace/models/qwen3-vl-32b",
         ):
             if (Path(candidate) / "config.json").exists():
                 model_path = candidate
                 break
 
     model_load_src = model_path or model_name
-    # Qwen3-VL-32B 默认 max_seq_len=262144（262K token），vLLM 要为此预留 KV cache
-    # ≈ 64GB；加上 67GB 模型权重远超 80GB H100。
-    # 我们单 shot 实际用量：system~800 + user~1600 + 8 frames×1500 + output 2048 ≈ 16K。
-    # 设 max_model_len=16384 让 KV cache 降到可管理的大小。
-    max_model_len = int(model_cfg.get("max_model_len", 16384))
-    gpu_mem_util  = float(model_cfg.get("gpu_memory_utilization", 0.9))
 
-    log.info(f"加载模型 {model_load_src} (dtype={dtype}, max_model_len={max_model_len}, "
-             f"gpu_util={gpu_mem_util}) ...")
+    # 按 model_cfg 组装 vLLM LLM() kwargs（支持 bf16/fp8/awq/awq_marlin/gptq-int4）
+    try:
+        llm_kwargs = _build_llm_kwargs(model_cfg)
+    except ValueError as ex:
+        log.error(str(ex))
+        return 1
+
+    log.info(f"加载模型 {model_load_src}")
+    log.info(f"  vLLM kwargs: {llm_kwargs}")
     if model_path:
         log.info(f"  使用本地路径，跳过 HF hub 下载")
     else:
-        log.warning(f"  未找到本地 pre-download，vLLM 会从 HF hub 下载到 {os.environ.get('HF_HOME')}")
+        log.warning(
+            f"  未找到本地 pre-download，vLLM 会从 HF hub 下载到 "
+            f"{os.environ.get('HF_HOME')}"
+        )
     t0 = time.time()
-    llm = LLM(model=model_load_src, dtype=dtype,
-              trust_remote_code=True,
-              max_model_len=max_model_len,
-              gpu_memory_utilization=gpu_mem_util,
-              limit_mm_per_prompt={"image": 16})
+    llm = LLM(model=model_load_src, **llm_kwargs)
     log.info(f"模型加载完成 ({time.time()-t0:.1f}s)")
+
+    if args.dry_run_model_load:
+        # Phase 3.3 早退：用于租到 Pod 后快速确认显存够不够
+        try:
+            import torch
+            mem_gb = torch.cuda.memory_allocated() / (1024 ** 3)
+            log.info(f"[dry-run-model-load] 加载完成后显存 "
+                     f"{mem_gb:.2f} GB（model weights + KV 初始分配）")
+        except Exception as ex:
+            log.warning(f"[dry-run-model-load] 无法读取 cuda 显存：{ex}")
+        return 0
 
     # 两轮推理的两份 schema（docs/problem/01_stage5_output_truncation.md 方案 E）
     schema_r1 = Round1Label.model_json_schema()
@@ -430,20 +560,7 @@ def main() -> int:
             ]},
         ]
 
-        # 失败保存助手（提前定义，下面要用）
-        def _save_failed(slug: str, raw_text: str, reason: str,
-                         errors: list | None = None,
-                         warnings: list | None = None) -> None:
-            fail_dir = out_root / "_failed"
-            fail_dir.mkdir(exist_ok=True)
-            (fail_dir / f"{slug}.raw.txt").write_text(raw_text, encoding="utf-8")
-            (fail_dir / f"{slug}.errors.json").write_text(
-                json.dumps({"reason": reason,
-                            "errors":   errors or [],
-                            "warnings": warnings or []},
-                           ensure_ascii=False, indent=2),
-                encoding="utf-8")
-
+        # 失败保存：调模块顶层 _save_failed(out_root, ...)
         slug = e.shot_id.replace("/", "__")
 
         try:
@@ -461,7 +578,7 @@ def main() -> int:
             obj = json.loads(raw_r1)
         except Exception as ex:
             log.error(f"[ERR parse-r1] {e.shot_id}: {ex}")
-            _save_failed(slug, raw_r1, f"json_parse_round1: {ex}")
+            _save_failed(out_root, slug, raw_r1, f"json_parse_round1: {ex}")
             bad += 1
             continue
 
@@ -513,7 +630,7 @@ def main() -> int:
                 raw_r2 = ""
                 infer_ms_r2 = 0
 
-            # 1b) Round 2 JSON 解析 + 合并
+            # 1b) Round 2 JSON 解析 + 合并（按 person_index 对齐）
             if raw_r2:
                 try:
                     face_obj = json.loads(raw_r2)
@@ -522,16 +639,41 @@ def main() -> int:
                         for fp in face_obj.get("persons", [])
                         if isinstance(fp, dict)
                     }
+                    r1_indices = {
+                        p.get("person_index", i)
+                        for i, p in enumerate(persons_r1)
+                    }
+                    extra = set(face_by_idx) - r1_indices
+                    missing = r1_indices - set(face_by_idx)
+                    if extra:
+                        log.warning(
+                            f"[warn] Round2 返回了 Round1 没有的 "
+                            f"person_index={sorted(extra)}，已忽略 | {e.shot_id}"
+                        )
+                    if missing:
+                        log.info(
+                            f"[info] Round2 缺失 person_index="
+                            f"{sorted(missing)} 的 face，face_analysis=null | "
+                            f"{e.shot_id}"
+                        )
+                    # 显式写入 face_analysis（None 也写），符合规范：
+                    # face_clearly_visible=False 时 face_analysis 应为 null，
+                    # 而不是 dict 里缺 key。Pydantic 校验要求字段存在。
                     for i, p in enumerate(persons_r1):
                         idx = p.get("person_index", i)
-                        fa = face_by_idx.get(idx)
-                        if fa is not None:
-                            p["face_analysis"] = fa
+                        p["face_analysis"] = face_by_idx.get(idx)  # 可能 None
                 except Exception as ex:
                     log.warning(f"[warn] Round2 parse 失败 {e.shot_id}: {ex}"
                                 f"（face_analysis 留空）")
-                    _save_failed(slug + ".round2", raw_r2,
+                    _save_failed(out_root, slug + ".round2", raw_r2,
                                  f"json_parse_round2: {ex}")
+                    # parse 失败：所有人 face_analysis=null，保持结构合规
+                    for i, p in enumerate(persons_r1):
+                        p.setdefault("face_analysis", None)
+            else:
+                # 没跑 Round2（Round1 无 person 或推理失败）：显式 null face
+                for i, p in enumerate(persons_r1):
+                    p.setdefault("face_analysis", None)
 
         infer_ms = infer_ms_r1 + infer_ms_r2
 
@@ -560,33 +702,49 @@ def main() -> int:
         except Exception as ex:
             log.warning(f"[warn clamp body-parts] {e.shot_id}: {ex}（继续）")
 
-        # 3) 注入 meta
+        # 3) 注入 meta —— 规范要求 vlm_model/vlm_version/frames_used/infer_time_ms；
+        #    其余是推理复现参数，Meta 类 extra="allow" 容许，便于下游消融分析。
         obj.setdefault("meta", {})
         obj["meta"].setdefault("vlm_model",   model_name)
         obj["meta"].setdefault("vlm_version", "2026-04")
         obj["meta"]["frames_used"]   = n_frames
         obj["meta"]["infer_time_ms"] = infer_ms
+        # 推理复现参数（采样 + 模型加载）
+        obj["meta"]["temperature"]         = float(samp.get("temperature", 0.2))
+        obj["meta"]["top_p"]               = float(samp.get("top_p", 0.9))
+        obj["meta"]["repetition_penalty"]  = float(samp.get("repetition_penalty", 1.05))
+        obj["meta"]["max_tokens_round1"]   = int(samp.get("max_tokens_round1", max_tokens_r1))
+        obj["meta"]["max_tokens_round2"]   = int(samp.get("max_tokens_round2", max_tokens_r2))
+        obj["meta"]["precision"]           = model_cfg.get("precision", "bf16")
+        obj["meta"]["quantization"]        = model_cfg.get("quantization")
+        obj["meta"]["tensor_parallel_size"] = int(model_cfg.get("tensor_parallel_size", 1))
+        obj["meta"]["max_model_len"]       = int(model_cfg.get("max_model_len", 16384))
 
-        # 4) Pydantic 结构校验 —— 已关闭。
-        #    理由：权威规范在 docs/labelingStandards/external_delivery_v1，
-        #    model 按 delivery_v1 system_prompt 输出，和 schemas.py:ShotLabel
-        #    已不同步（后者是旧 json_schema_integrated.md 的镜像）。
-        #    业务合规改由第 5 步 ShotValidator 把关。
-        #    如果需要重新启用，见 src/runpod/schemas.py 的过期提醒。
+        # 4) Pydantic 结构校验：ShotLabel 强制 root schema 完整性 + enum 合法。
+        #    schemas.py 用 _Base(extra="allow") 宽容未来字段演进，但对 enum /
+        #    必需 gate 字段依然严格；这层是 delivery_v1 合规的结构防线，业务
+        #    语义由第 5 步 ShotValidator 把关，两者互补。
+        try:
+            ShotLabel.model_validate(obj)
+        except Exception as ex:
+            log.error(f"[ERR schema] {e.shot_id}: {ex}")
+            _save_failed(out_root, slug, raw_r1, f"schema_validation_failed: {ex}")
+            bad += 1
+            continue
 
-        # 5) 业务校验（14 项 ShotValidator）— errors=0 才算合格
+        # 5) 业务校验（16 项 ShotValidator）— errors=0 才算合格
         try:
             errors, warnings, _infos = validator.validate(obj)
         except Exception as ex:
             log.error(f"[ERR validator] {e.shot_id}: {ex}")
-            _save_failed(slug, raw, f"validator_crash: {ex}")
+            _save_failed(out_root, slug, raw_r1, f"validator_crash: {ex}")
             bad += 1
             continue
 
         if errors:
             log.error(f"[ERR validate] {e.shot_id}: {len(errors)} errors "
                       f"({len(warnings)} warnings)")
-            _save_failed(slug, raw, "business_validation_failed",
+            _save_failed(out_root, slug, raw_r1, "business_validation_failed",
                          errors=errors, warnings=warnings)
             bad += 1
             continue

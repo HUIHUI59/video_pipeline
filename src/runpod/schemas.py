@@ -117,66 +117,72 @@ class ShotContext(_Base):
 # ══════════════════════════════════════════════════════════════
 
 class AlternativeCaptions(_Base):
-    direct:       str
-    literary:     str
-    direction:    str
-    situational:  str
+    # 任何单项都可能 null（当 face/body 的 clearly_visible=False 时，整个
+    # alt_captions 对象也可能出现 dict-with-null-subfields 形式）
+    direct:       Optional[str] = None
+    literary:     Optional[str] = None
+    direction:    Optional[str] = None
+    situational:  Optional[str] = None
 
 
 class FacialComponents(_Base):
-    eyes:           str
-    eyebrows:       str
-    mouth:          str
-    jaw:            str
-    gaze_direction: str
-    head_pose:      str
+    eyes:           Optional[str] = None
+    eyebrows:       Optional[str] = None
+    mouth:          Optional[str] = None
+    jaw:            Optional[str] = None
+    gaze_direction: Optional[str] = None
+    head_pose:      Optional[str] = None
 
 
 class FacialAttributes(_Base):
-    apparent_gender:    str
-    apparent_age_range: str
-    glasses:            bool
-    facial_hair:        str
-    head_covering:      str
-    mask:               bool
-    makeup_visible:     bool
-    distinctive_notes:  str = ""
+    apparent_gender:    Optional[str]  = None
+    apparent_age_range: Optional[str]  = None
+    glasses:            Optional[bool] = None
+    facial_hair:        Optional[str]  = None
+    head_covering:      Optional[str]  = None
+    mask:               Optional[bool] = None
+    makeup_visible:     Optional[bool] = None
+    distinctive_notes:  Optional[str]  = ""
 
 
 class BlendshapeHints(_Base):
-    brow_raise_inner:   BlendshapeScale
-    brow_raise_outer:   BlendshapeScale
-    brow_furrow:        BlendshapeScale
-    eye_widen:          BlendshapeScale
-    eye_squint:         BlendshapeScale
-    eye_blink_state:    BlinkState
-    cheek_raise:        BlendshapeScale
-    nose_wrinkle:       BlendshapeScale
-    upper_lip_raise:    BlendshapeScale
-    lip_corner_pull:    BlendshapeScale
-    lip_corner_depress: BlendshapeScale
-    lip_tighten:        BlendshapeScale
-    lip_part:           BlendshapeScale
-    jaw_clench:         BlendshapeScale
-    jaw_drop:           BlendshapeScale
+    # 面部不可见时，整个 blendshape_hints 对象的子字段会是 null
+    brow_raise_inner:   Optional[BlendshapeScale] = None
+    brow_raise_outer:   Optional[BlendshapeScale] = None
+    brow_furrow:        Optional[BlendshapeScale] = None
+    eye_widen:          Optional[BlendshapeScale] = None
+    eye_squint:         Optional[BlendshapeScale] = None
+    eye_blink_state:    Optional[BlinkState]      = None
+    cheek_raise:        Optional[BlendshapeScale] = None
+    nose_wrinkle:       Optional[BlendshapeScale] = None
+    upper_lip_raise:    Optional[BlendshapeScale] = None
+    lip_corner_pull:    Optional[BlendshapeScale] = None
+    lip_corner_depress: Optional[BlendshapeScale] = None
+    lip_tighten:        Optional[BlendshapeScale] = None
+    lip_part:           Optional[BlendshapeScale] = None
+    jaw_clench:         Optional[BlendshapeScale] = None
+    jaw_drop:           Optional[BlendshapeScale] = None
 
 
 class FaceAnalysis(_Base):
+    # face_clearly_visible 是 gate；gate=False 时下面字段都可为 null。
+    # face_size_ratio 按规范即使不可见也要写，但 delivery_v1 的部分 example
+    # 里也为 null，保持 Optional 最稳。
     face_clearly_visible:         bool
-    face_size_ratio:              float = Field(ge=0.0, le=1.0)
-    primary_emotion:              Emotion
+    face_size_ratio:              Optional[float] = Field(None, ge=0.0, le=1.0)
+    primary_emotion:              Optional[Emotion] = None
     secondary_emotion:            Optional[Emotion] = None
-    valence:                      float = Field(ge=-1.0, le=1.0)
-    arousal:                      float = Field(ge=0.0, le=1.0)
-    intensity:                    float = Field(ge=0.0, le=1.0)
-    expression_caption:           str
-    alternative_captions:         AlternativeCaptions
-    facial_components:            FacialComponents
-    facial_attributes:            FacialAttributes
-    temporal_change:              TemporalChange
-    micro_expression:             bool
-    observable_blendshape_hints:  BlendshapeHints
-    expression_confidence:        float = Field(ge=0.0, le=1.0)
+    valence:                      Optional[float] = Field(None, ge=-1.0, le=1.0)
+    arousal:                      Optional[float] = Field(None, ge=0.0, le=1.0)
+    intensity:                    Optional[float] = Field(None, ge=0.0, le=1.0)
+    expression_caption:           Optional[str] = None
+    alternative_captions:         Optional[AlternativeCaptions] = None
+    facial_components:            Optional[FacialComponents]    = None
+    facial_attributes:            Optional[FacialAttributes]    = None
+    temporal_change:              Optional[TemporalChange] = None
+    micro_expression:             Optional[bool] = None
+    observable_blendshape_hints:  Optional[BlendshapeHints] = None
+    expression_confidence:        Optional[float] = Field(None, ge=0.0, le=1.0)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -184,50 +190,53 @@ class FaceAnalysis(_Base):
 # ══════════════════════════════════════════════════════════════
 
 class ActionQuality(_Base):
-    intensity: ActionIntensity
-    tone:      ActionTone
-    tempo:     ActionTempo
+    intensity: Optional[ActionIntensity] = None
+    tone:      Optional[ActionTone]      = None
+    tempo:     Optional[ActionTempo]     = None
 
 
 class KinematicsHint(_Base):
-    trajectory:     KinTrajectory
-    periodicity:    KinPeriodicity
-    symmetry:       KinSymmetry
-    duration_class: KinDuration
+    trajectory:     Optional[KinTrajectory]  = None
+    periodicity:    Optional[KinPeriodicity] = None
+    symmetry:       Optional[KinSymmetry]    = None
+    duration_class: Optional[KinDuration]    = None
 
 
 class UpperBodyDetail(_Base):
-    head:      str
-    neck:      str
-    shoulders: str
-    arms:      str
-    hands:     str
-    torso:     str
-    posture:   str
+    head:      Optional[str] = None
+    neck:      Optional[str] = None
+    shoulders: Optional[str] = None
+    arms:      Optional[str] = None
+    hands:     Optional[str] = None
+    torso:     Optional[str] = None
+    posture:   Optional[str] = None
 
 
 class BodyInteraction(_Base):
-    count:                        InteractionCount
-    contact:                      InteractionContact
-    relation:                     InteractionRelation
+    count:                        Optional[InteractionCount]    = None
+    contact:                      Optional[InteractionContact]  = None
+    relation:                     Optional[InteractionRelation] = None
     interacts_with_person_index:  list[int] = Field(default_factory=list)
 
 
 class BodyAnalysis(_Base):
+    # body_clearly_visible 是 gate；gate=False 时下面字段可为 null。
+    # shot_frame_of_body 规范文本要求非空，但官方 example 里遇到不可见时也出过
+    # null，放宽 Optional 最稳。
     body_clearly_visible:    bool
-    shot_frame_of_body:      BodyShotFrame
-    visible_body_parts:      list[str]
-    motion_caption:          str
-    alternative_captions:    AlternativeCaptions
-    action_primary:          str                    # taxonomy leaf 或 "other/xxx"
-    action_quality:          ActionQuality
-    body_focus:              BodyFocus
-    kinematics_hint:         KinematicsHint
-    upper_body_detail:       UpperBodyDetail
+    shot_frame_of_body:      Optional[BodyShotFrame] = None
+    visible_body_parts:      Optional[list[str]]     = None
+    motion_caption:          Optional[str] = None
+    alternative_captions:    Optional[AlternativeCaptions] = None
+    action_primary:          Optional[str] = None       # taxonomy leaf 或 "other/xxx"
+    action_quality:          Optional[ActionQuality] = None
+    body_focus:              Optional[BodyFocus] = None
+    kinematics_hint:         Optional[KinematicsHint] = None
+    upper_body_detail:       Optional[UpperBodyDetail] = None
     gesture_detail:          Optional[str] = None
-    hands_visible:           bool
-    interaction:             BodyInteraction
-    motion_confidence:       float = Field(ge=0.0, le=1.0)
+    hands_visible:           Optional[bool] = None
+    interaction:             Optional[BodyInteraction] = None
+    motion_confidence:       Optional[float] = Field(None, ge=0.0, le=1.0)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -347,6 +356,9 @@ class ManifestEntry(_Base):
     largest_face_ratio:    Optional[float]            = None
     quality_ok:            Optional[bool]             = None
     quality_metrics:       Optional[ManifestQuality]  = None
+    # ── v3 新增（Stage 5 推断 shot_frame_of_body 的辅助信号）───────
+    largest_subject_bbox:            Optional[list[float]] = None   # [x1,y1,x2,y2] 归一化 [0,1]
+    largest_subject_vertical_center: Optional[float]       = None   # 纵向中心归一化 [0,1]
 
 
 # ══════════════════════════════════════════════════════════════

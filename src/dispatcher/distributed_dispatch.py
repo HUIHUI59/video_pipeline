@@ -58,6 +58,20 @@ CONDA_SEARCH = [
     "/opt/conda/bin/conda","/usr/local/conda/bin/conda",
 ]
 
+
+def _known_hosts_path() -> str:
+    """项目专用 known_hosts，避免污染用户 ~/.ssh/known_hosts。"""
+    ssh_dir = Path.home() / ".ssh"
+    ssh_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        os.chmod(ssh_dir, 0o700)
+    except OSError:
+        pass
+    kh = ssh_dir / "video_pipeline_known_hosts"
+    if not kh.exists():
+        kh.touch(mode=0o600)
+    return str(kh)
+
 # ══════════════════════════════════════════════════════════════
 # Server
 # ══════════════════════════════════════════════════════════════
@@ -72,9 +86,12 @@ class Server:
     def is_local(self): return self.host in ("localhost","127.0.0.1")
 
     def ssh_opts(self):
+        # StrictHostKeyChecking=accept-new：首次 TOFU 记录 host key，后续严格验
+        # 证。结合项目独立 known_hosts 能抵御 MITM，而又不阻塞首次部署。
         return ["-i",os.path.expanduser(self.ssh_key),
                 "-p",str(self.port),
-                "-o","StrictHostKeyChecking=no",
+                "-o","StrictHostKeyChecking=accept-new",
+                "-o",f"UserKnownHostsFile={_known_hosts_path()}",
                 "-o","ConnectTimeout=10",
                 "-o","BatchMode=yes"]
 

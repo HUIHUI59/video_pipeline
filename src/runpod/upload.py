@@ -18,7 +18,15 @@ Stage 5 本地侧：把筛选后的 clips + manifest rsync 到 Runpod Pod。
 """
 
 from __future__ import annotations
-import argparse, json, os, shlex, subprocess, sys, time
+
+import argparse
+import json
+import logging
+import os
+import shlex
+import subprocess
+import sys
+import time
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -30,16 +38,41 @@ except ImportError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
     from src.runpod.schemas import ManifestEntry  # noqa
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(levelname)-8s  %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
+)
+log = logging.getLogger("upload")
+
 
 def _load_config(path: str) -> dict[str, Any]:
     with open(path, encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
+def _known_hosts_path() -> str:
+    """项目专用 known_hosts，避免污染用户 ~/.ssh/known_hosts。首次 ensure 存在。"""
+    ssh_dir = Path.home() / ".ssh"
+    ssh_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        os.chmod(ssh_dir, 0o700)
+    except OSError:
+        pass
+    kh = ssh_dir / "video_pipeline_known_hosts"
+    if not kh.exists():
+        kh.touch(mode=0o600)
+    return str(kh)
+
+
 def _ssh_opts(pod: dict[str, Any]) -> list[str]:
+    """SSH 选项：首次连接 TOFU（accept-new），后续严格 pinning。
+    比 StrictHostKeyChecking=no 更安全：host key 变化时会被拒，可抵御 MITM。
+    """
     return ["-i", os.path.expanduser(pod["ssh_key"]),
             "-p", str(pod["port"]),
-            "-o", "StrictHostKeyChecking=no",
+            "-o", "StrictHostKeyChecking=accept-new",
+            "-o", f"UserKnownHostsFile={_known_hosts_path()}",
             "-o", "ConnectTimeout=10"]
 
 
@@ -58,7 +91,7 @@ def _iter_manifest_lines(manifest_dir: str,
                 try:
                     entry = ManifestEntry.model_validate(json.loads(line))
                 except Exception as e:
-                    print(f"[WARN] {p.name}:{ln_no} 校验失败，跳过 ({e})", file=sys.stderr)
+                    log.warning(f"{p.name}:{ln_no} 校验失败，跳过 ({e})")
                     continue
                 yield movie, entry
 
@@ -94,11 +127,11 @@ def _filter_entries(entries: list[tuple[str, ManifestEntry]],
         if max_shots and len(out) >= max_shots:
             break
     if skipped_landscape:
-        print(f"  [landscape] 跳过无人镜头 {skipped_landscape} 个"
-              f"（--include-landscape 可关闭此过滤）")
+        log.info(f"[landscape] 跳过无人镜头 {skipped_landscape} 个"
+                 f"（--include-landscape 可关闭此过滤）")
     if skipped_quality:
-        print(f"  [quality] 跳过画质不合格镜头 {skipped_quality} 个"
-              f"（--include-bad-quality 可关闭此过滤）")
+        log.info(f"[quality] 跳过画质不合格镜头 {skipped_quality} 个"
+                 f"（--include-bad-quality 可关闭此过滤）")
     return out
 
 
@@ -114,10 +147,10 @@ def _write_filtered_manifest(entries: list[tuple[str, ManifestEntry]]) -> str:
 def _rsync_files(files: list[tuple[str, str]],
                  pod: dict[str, Any], dry_run: bool) -> None:
     if not files:
-        print("  [skip] 没有文件要传")
+        log.info("[skip] 没有文件要传")
         return
     ssh_cmd = "ssh " + " ".join(shlex.quote(x) for x in _ssh_opts(pod))
-    print(f"\n  SSH 选项: {ssh_cmd}")
+    log.info(f"SSH 选项: {ssh_cmd}")
     for local, remote in files:
         # --mkpath (rsync 3.2.3+) 自动创建 remote 的父目录链
         # --no-owner --no-group 跳过 owner/group 同步：WSL uid ≠ Pod uid 会
@@ -127,11 +160,11 @@ def _rsync_files(files: list[tuple[str, str]],
                "--no-owner", "--no-group",
                "-e", ssh_cmd,
                local, f"{pod['user']}@{pod['host']}:{remote}"]
-        print("  $", " ".join(shlex.quote(c) for c in cmd))
+        log.info("$ " + " ".join(shlex.quote(c) for c in cmd))
         if not dry_run:
             r = subprocess.run(cmd, check=False)
             if r.returncode != 0:
-                print(f"  [ERR] rsync 失败 rc={r.returncode}", file=sys.stderr)
+                log.error(f"rsync 失败 rc={r.returncode} local={local} remote={remote}")
 
 
 def main() -> int:
@@ -168,30 +201,30 @@ def main() -> int:
     file_ops: list[tuple[str, str]] = []
 
     if args.code_only:
-        print("  [code-only] 跳过 clips + manifest，只推代码 + 配置 + delivery_v1")
+        log.info("[code-only] 跳过 clips + manifest，只推代码 + 配置 + delivery_v1")
     else:
         if not Path(manifest_dir).exists():
-            print(f"[ERR] manifest 目录不存在: {manifest_dir}", file=sys.stderr)
+            log.error(f"manifest 目录不存在: {manifest_dir}")
             return 1
 
-        print(f"  扫描 manifest: {manifest_dir}")
+        log.info(f"扫描 manifest: {manifest_dir}")
         raw = list(_iter_manifest_lines(manifest_dir,
                                         set(movies) if movies else None))
-        print(f"  校验通过: {len(raw)} 条")
+        log.info(f"校验通过: {len(raw)} 条")
         filtered = _filter_entries(raw, categories, max_shots,
                                    skip_bad_quality=not args.include_bad_quality,
                                    skip_landscape=not args.include_landscape)
-        print(f"  筛选后:   {len(filtered)} 条  "
-              f"(categories={categories or 'all'}, movies={movies or 'all'}, "
-              f"max={max_shots or '∞'}, skip_bad_quality={not args.include_bad_quality}, "
-              f"skip_landscape={not args.include_landscape})")
+        log.info(f"筛选后:   {len(filtered)} 条  "
+                 f"(categories={categories or 'all'}, movies={movies or 'all'}, "
+                 f"max={max_shots or '∞'}, skip_bad_quality={not args.include_bad_quality}, "
+                 f"skip_landscape={not args.include_landscape})")
 
         if not filtered:
-            print("[WARN] 没有符合条件的 shot，退出。")
+            log.warning("没有符合条件的 shot，退出。")
             return 0
 
         filt_path = _write_filtered_manifest(filtered)
-        print(f"  筛后 manifest → {filt_path}")
+        log.info(f"筛后 manifest → {filt_path}")
 
         # clips 按筛选后逐个加进 rsync 列表
         for _movie, e in filtered:
@@ -202,11 +235,11 @@ def main() -> int:
                 local = rel if os.path.isabs(rel) else str(Path(clips_root) / rel)
             remote = f"{pod_workspace}/{rel}"
             if not Path(local).exists():
-                print(f"  [miss] 本地文件不存在，跳过: {local}")
+                log.warning(f"[miss] 本地文件不存在，跳过: {local}")
                 continue
             file_ops.append((local, remote))
 
-        print(f"  clips 待传: {len(file_ops)} 个")
+        log.info(f"clips 待传: {len(file_ops)} 个")
 
         file_ops.append((filt_path, f"{pod_workspace}/manifest.jsonl"))
 
@@ -242,33 +275,41 @@ def main() -> int:
             dst = f"{pod_workspace}/delivery_v1/{rel.as_posix()}"
             file_ops.append((str(p), dst))
 
-    print(f"\n  目标 Pod: {pod['user']}@{pod['host']}:{pod['port']}  workspace={pod_workspace}")
+    log.info(f"目标 Pod: {pod['user']}@{pod['host']}:{pod['port']}  workspace={pod_workspace}")
+
+    # 远端命令里所有来自 config 的路径必须 shlex.quote —— 即便来源可信，
+    # 防御性转义能彻底消除 path 里空格/分号/反引号引发的 shell 注入。
+    _ws_q = shlex.quote(pod_workspace)
+    remote_mkdir = (
+        f"mkdir -p {_ws_q}/clips {_ws_q}/src/runpod "
+        f"{_ws_q}/tools {_ws_q}/delivery_v1"
+    )
     mkdir_cmd = (["ssh"] + _ssh_opts(pod) +
-                 [f"{pod['user']}@{pod['host']}",
-                  f"mkdir -p {pod_workspace}/clips {pod_workspace}/src/runpod "
-                  f"{pod_workspace}/tools {pod_workspace}/delivery_v1"])
-    print("  $", " ".join(shlex.quote(c) for c in mkdir_cmd))
+                 [f"{pod['user']}@{pod['host']}", remote_mkdir])
+    log.info("$ " + " ".join(shlex.quote(c) for c in mkdir_cmd))
     if not args.dry_run:
         subprocess.run(mkdir_cmd, check=False)
 
     # 确保 Pod 端有 rsync（Runpod 默认 PyTorch 镜像不带，rsync 必须两端都有）
+    # 这条命令没有用户输入参与，保留字面字符串即可。
     ensure_rsync_cmd = (["ssh"] + _ssh_opts(pod) +
                         [f"{pod['user']}@{pod['host']}",
                          "command -v rsync >/dev/null 2>&1 || "
                          "(apt-get update -qq && apt-get install -y -qq rsync)"])
-    print("  $", " ".join(shlex.quote(c) for c in ensure_rsync_cmd))
+    log.info("$ " + " ".join(shlex.quote(c) for c in ensure_rsync_cmd))
     if not args.dry_run:
         r = subprocess.run(ensure_rsync_cmd, check=False)
         if r.returncode != 0:
-            print(f"  [WARN] 无法在 Pod 安装 rsync (rc={r.returncode})，"
-                  f"后续 rsync 可能失败。请手动在 Pod 跑 apt-get install rsync",
-                  file=sys.stderr)
+            log.warning(
+                f"无法在 Pod 安装 rsync (rc={r.returncode})，"
+                f"后续 rsync 可能失败。请手动在 Pod 跑 apt-get install rsync"
+            )
 
-    print(f"\n  rsync 共 {len(file_ops)} 个文件 (dry_run={args.dry_run})")
+    log.info(f"rsync 共 {len(file_ops)} 个文件 (dry_run={args.dry_run})")
     _rsync_files(file_ops, pod, args.dry_run)
 
-    print("\n  ✅ 上传完成。")
-    print(f"  下一步：bash scripts/runpod/02_run.sh  （ssh 进 Pod 跑 pod_runner）")
+    log.info("✅ 上传完成。")
+    log.info("下一步：bash scripts/runpod/02_run.sh  （ssh 进 Pod 跑 pod_runner）")
     return 0
 
 

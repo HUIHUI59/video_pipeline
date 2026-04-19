@@ -26,7 +26,7 @@
 
 ## 0. TL;DR 省钱要点
 
-只看这 8 条就能避开 80% 的坑：
+只看这 9 条就能避开 80% 的坑：
 
 1. **用 Network Volume** 存模型权重（$0.07/GB/月），不要每次开 Pod 都重下 67GB 模型。
 2. **用 Community Cloud** 而不是 Secure Cloud（便宜 15%~20%），批量任务够用。
@@ -36,6 +36,11 @@
 6. **跑完一批 Terminate**。下次再开新 Pod，Network Volume 里的模型和代码都在，重建环境 ~3 分钟就能继续。
 7. 睡觉前、吃饭前**检查 Pod 是不是还在跑**。Runpod 不会因为你忘记就自动停——**忘关一台 H100 一晚上 ≈ $60**。
 8. 先 On-Demand 跑通全流程，**再考虑 Spot**（便宜 40-50%，随机被收回，配合 checkpoint 断点续跑可承受）。
+9. **按模型选 Pod 模板**（项目同时支持 32B 和 122B）：
+   - `Qwen3-VL-32B-Instruct`（BF16，`configs/runpod.yaml`）→ 1× **H100 80GB** 就够
+   - `Qwen3.5-122B-A10B-Instruct-AWQ`（INT4，`configs/runpod.122b.yaml`）→ 最舒服 **H200 141GB**；预算紧可 1× H100 80GB（`max_model_len=16384` + `limit_mm_per_prompt.image=8`）；最稳 **2× A100 80GB** `tensor_parallel_size=2`
+   - 租到 Pod 先跑 `pod_runner --dry-run-model-load`，实际显存占用会直接打印出来，不花推理钱验证容量
+   - 详细矩阵见 `docs/stages/05_labeling.md` 的"模型与 GPU 选型"章节
 
 ---
 
