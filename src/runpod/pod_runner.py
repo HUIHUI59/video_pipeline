@@ -464,13 +464,23 @@ def main() -> int:
     schema_r2 = Round2Label.model_json_schema()
 
     def _build_sampling(schema: dict, max_tokens: int, round_label: str) -> SamplingParams:
-        """结构化输出 API 按新→旧依次尝试；全失败降级无约束。"""
+        """结构化输出 API 按新→旧依次尝试；全失败降级无约束。
+        逃生口：sampling.disable_structured_output=true 时直接无约束（用于
+        vLLM 0.19 + MoE 量化 kernel 的 structured outputs 运行时崩溃）。
+        """
         base_kwargs = dict(
             temperature       = float(samp.get("temperature", 0.2)),
             top_p             = float(samp.get("top_p", 0.9)),
             max_tokens        = max_tokens,
             repetition_penalty= float(samp.get("repetition_penalty", 1.05)),
         )
+        if bool(samp.get("disable_structured_output", False)):
+            log.warning(
+                f"{round_label}: disable_structured_output=true，跳过 guided "
+                f"JSON，改无约束生成 + 事后 json.loads。有 JSON 解析失败的风险。"
+            )
+            return SamplingParams(**base_kwargs)
+
         attempts_: list[tuple[str, dict]] = []
         if GuidedDecodingParams is not None:
             attempts_.append(

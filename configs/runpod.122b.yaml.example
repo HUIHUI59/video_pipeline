@@ -70,3 +70,8 @@ sampling:
   frames_single_dominant: 8
   frames_multi_wide:      4
   resize_shortest:        448
+  # 逃生口：vLLM 0.19 + MoE GPTQ-Int4 (moe_wna16 kernel) 的 structured outputs
+  # 运行时崩溃时开启。开了之后 VLM 自由生成 JSON，事后 json.loads 兜底。
+  # 默认 false；遇到 "EngineCore encountered an issue" + structured outputs
+  # 启用日志 时可以试着设为 true。
+  disable_structured_output: false
