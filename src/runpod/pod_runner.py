@@ -803,13 +803,24 @@ def main() -> int:
         #    schemas.py 用 _Base(extra="allow") 宽容未来字段演进，但对 enum /
         #    必需 gate 字段依然严格；这层是 delivery_v1 合规的结构防线，业务
         #    语义由第 5 步 ShotValidator 把关，两者互补。
-        try:
-            ShotLabel.model_validate(obj)
-        except Exception as ex:
-            log.error(f"[ERR schema] {e.shot_id}: {ex}")
-            _save_failed(out_root, slug, raw_r1, f"schema_validation_failed: {ex}")
-            bad += 1
-            continue
+        #
+        #    逃生口：vLLM 0.19 + MoE 量化 kernel (moe_wna16 等) 上 structured
+        #    outputs 无法真正约束 JSON schema，VLM 会自由发挥输出格式（list vs
+        #    dict、string vs nested）。此时开 sampling.disable_schema_validation
+        #    跳过这层，让下游 normalize/validator 尽力消化；合规性由
+        #    ShotValidator 的 16 条业务规则兜底。
+        if not bool(samp.get("disable_schema_validation", False)):
+            try:
+                ShotLabel.model_validate(obj)
+            except Exception as ex:
+                log.error(f"[ERR schema] {e.shot_id}: {ex}")
+                _save_failed(out_root, slug, raw_r1,
+                             f"schema_validation_failed: {ex}")
+                bad += 1
+                continue
+        else:
+            log.info(f"[info] {e.shot_id}: 跳过 Pydantic 结构校验 "
+                     f"(disable_schema_validation=true)")
 
         # 5) 业务校验（16 项 ShotValidator）— errors=0 才算合格
         try:

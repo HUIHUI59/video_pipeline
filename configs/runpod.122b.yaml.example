@@ -75,3 +75,12 @@ sampling:
   # 默认 false；遇到 "EngineCore encountered an issue" + structured outputs
   # 启用日志 时可以试着设为 true。
   disable_structured_output: false
+  # 逃生口 2：跳过 Pydantic 严格结构校验（ShotLabel.model_validate）。
+  # 当 vLLM structured outputs 启用但**没有实际 enforce**（实测 0.19 + 122B
+  # GPTQ-Int4 上 Round2 face_analysis 经常输出 list captions / string
+  # blendshape_hints 而不是 dict），开启此项让输出跳过 Pydantic 直接进 normalize
+  # 和 ShotValidator 的业务校验。合规性由 16 条 ShotValidator 规则兜底。
+  # 默认 false；拿到 "[ERR schema] ... validation errors for ShotLabel" 一堆
+  # 错误时可以试着开起来，先把 VLM 输出入库看看质量，再决定改 prompt 还是降级
+  # 模型。开启后需要配合 normalize_tags 把 list→dict 的格式转换。
+  disable_schema_validation: false
