@@ -596,12 +596,33 @@ def main() -> int:
 
         # ── Round 1：body + scene + interaction + quality + usability ──
         # system_prompt 保持 delivery_v1 原版；user_text 末尾追加硬指令：本轮只出 body
+        # 结构化约束在 MoE 量化 kernel 上不能 enforce，所以这里用硬指令 + 结构
+        # 示例强 nudge VLM 输出规范 JSON 嵌套。
         r1_hint = (
             "\n\nCRITICAL ROUND 1 INSTRUCTION: For this round, DO NOT output "
             "face_analysis for any person. The output schema for this round "
             "excludes face_analysis entirely — focus on body_analysis, "
             "shot_context, interaction, quality_flags, usability_score. "
             "Face analysis will be done in a separate focused round.\n\n"
+            "STRICT STRUCTURAL REQUIREMENTS (do NOT flatten, do NOT stringify):\n"
+            '  - body_analysis.alternative_captions MUST be an OBJECT with '
+            'exactly 4 keys {"direct": "...", "literary": "...", '
+            '"direction": "...", "situational": "..."}, NOT a list/array.\n'
+            '  - body_analysis.kinematics_hint MUST be an OBJECT with keys '
+            '{"trajectory": "...", "periodicity": "periodic|non_periodic", '
+            '"symmetry": "bilateral_symmetric|bilateral_asymmetric|axial", '
+            '"duration_class": "..."}, NOT a single word string like "static".\n'
+            '  - body_analysis.action_quality MUST be an OBJECT with keys '
+            '{"intensity": "low|mid|high", "tone": "...", "tempo": "..."}, '
+            'NOT a string.\n'
+            '  - body_analysis.upper_body_detail MUST be an OBJECT with 7 '
+            'string fields (head, neck, shoulders, arms, hands, torso, '
+            'posture).\n'
+            '  - quality_flags MUST include booleans/enums; vlm_confidence '
+            'MUST be a number in [0,1] (not a string like "high").\n'
+            '  - usability_score MUST be {"face": <number>, "motion": '
+            '<number>}, both in [0,1]. Do not add extra keys like "emotion" '
+            'or "overall".\n\n'
             "TOKEN BUDGET IS STRICT. Output COMPACT JSON on minimal lines: "
             "NO pretty-printing, NO 4-space indentation, NO unnecessary "
             "whitespace. Keep every string description CONCISE — "
@@ -671,13 +692,73 @@ def main() -> int:
                 f"video shot, at positions: {pos_list}.\n\n"
                 "Now provide detailed face_analysis for EACH person, indexed "
                 "by person_index exactly matching the previous round. "
-                "Follow the delivery_v1 face_analysis spec (primary_emotion, "
-                "valence/arousal/intensity, expression_caption, "
-                "alternative_captions, facial_components, facial_attributes, "
-                "temporal_change, observable_blendshape_hints, "
-                "expression_confidence, etc.). Output ONLY the JSON "
-                '{"persons": [{"person_index": i, "face_analysis": {...}}, ...]}'
-                "\n\nTOKEN BUDGET IS STRICT. Output COMPACT JSON on minimal "
+                "Output ONLY the JSON "
+                '{"persons": [{"person_index": i, "face_analysis": {...}}, ...]}.'
+                "\n\n"
+                "STRICT face_analysis SCHEMA (follow this shape EXACTLY for "
+                "each person; do NOT flatten, do NOT stringify objects):\n"
+                "```\n"
+                "{\n"
+                '  "face_clearly_visible": true,          // REQUIRED bool, '
+                'set false when face occluded/<3% of frame (then other fields null)\n'
+                '  "face_size_ratio": 0.08,                // number [0,1]\n'
+                '  "primary_emotion": "neutral",           // enum: anger, sadness, '
+                'joy, fear, surprise, disgust, contempt, neutral, complex\n'
+                '  "secondary_emotion": null,              // optional enum or null\n'
+                '  "valence": 0.2,                         // NUMBER in [-1,1], '
+                'NOT a word like "positive"\n'
+                '  "arousal": 0.3,                         // NUMBER in [0,1], '
+                'NOT a word like "low"\n'
+                '  "intensity": 0.4,                       // NUMBER in [0,1], '
+                'NOT a word like "medium"\n'
+                '  "expression_caption": "Full descriptive paragraph of the '
+                'facial expression.",\n'
+                '  "alternative_captions": {               // OBJECT with EXACTLY '
+                '4 string keys. NOT a list/array.\n'
+                '    "direct": "...", "literary": "...", "direction": "...", '
+                '"situational": "..."\n'
+                '  },\n'
+                '  "facial_components": {                  // OBJECT with 6 string keys\n'
+                '    "eyes": "...", "eyebrows": "...", "mouth": "...",\n'
+                '    "jaw": "...", "gaze_direction": "camera|left|right|up|'
+                'down|averted|closed",\n'
+                '    "head_pose": "frontal|3q_left|3q_right|profile_left|'
+                'profile_right|tilted_up|tilted_down"\n'
+                '  },\n'
+                '  "facial_attributes": {                  // OBJECT with 8 keys; '
+                '"facial_hair" etc MUST be STRINGS (e.g. "none"), not booleans\n'
+                '    "apparent_gender": "male|female|ambiguous",\n'
+                '    "apparent_age_range": "child|teen|young_adult|adult|'
+                'middle_aged|elderly",\n'
+                '    "glasses": false, "facial_hair": "none", "head_covering": '
+                '"none", "mask": false, "makeup_visible": false, '
+                '"distinctive_notes": ""\n'
+                '  },\n'
+                '  "temporal_change": "static",            // enum: static, '
+                'building, peak_then_release, transition, rapid_micro\n'
+                '  "micro_expression": false,\n'
+                '  "observable_blendshape_hints": {        // OBJECT with 15 '
+                'enum keys. NOT a flat string.\n'
+                '    "brow_raise_inner": "none", "brow_raise_outer": "none",\n'
+                '    "brow_furrow": "none", "eye_widen": "none", '
+                '"eye_squint": "none",\n'
+                '    "eye_blink_state": "open",            // enum: open, half, '
+                'closed, rapid_blink, unknown\n'
+                '    "cheek_raise": "none", "nose_wrinkle": "none",\n'
+                '    "upper_lip_raise": "none", "lip_corner_pull": "none",\n'
+                '    "lip_corner_depress": "none", "lip_tighten": "none",\n'
+                '    "lip_part": "none", "jaw_clench": "none", "jaw_drop": "none"\n'
+                '    // All 14 non-blink_state fields use enum: none|slight|'
+                'medium|strong|unknown\n'
+                '  },\n'
+                '  "expression_confidence": 0.8            // number [0,1]\n'
+                '}\n'
+                "```\n\n"
+                "GATE RULE: if face is not clearly visible (occluded, <3% of "
+                "frame, back view), set face_clearly_visible=false and you MAY "
+                "set the other fields to null, BUT the object structure above "
+                "must still be present (with nulls where appropriate).\n\n"
+                "TOKEN BUDGET IS STRICT. Output COMPACT JSON on minimal "
                 "lines: NO pretty-printing, NO 4-space indentation, NO "
                 "unnecessary whitespace. Keep every string description "
                 "CONCISE — expression_caption under 60 words, each "
