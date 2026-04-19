@@ -10,20 +10,39 @@ if [ ! -f "$CONFIG" ]; then
   echo "[ERR] 配置文件不存在: $CONFIG"; exit 1
 fi
 
-# 从 yaml 里抽 Pod 连接信息
-eval "$(python - <<PY
-import yaml, os
-c = yaml.safe_load(open("$CONFIG"))
+# 从 yaml 抽 Pod 连接信息 + 模型信息（MODEL_NAME / MODEL_SIZE_GB / MODEL_DIR）
+eval "$(python - <<'PY' "$CONFIG"
+import os, sys, yaml
+c = yaml.safe_load(open(sys.argv[1]))
 p = c["pod"]
 print(f"POD_HOST={p['host']}")
 print(f"POD_PORT={p['port']}")
 print(f"POD_USER={p['user']}")
 print(f"POD_KEY={os.path.expanduser(p['ssh_key'])}")
 print(f"POD_WS={c['paths']['pod_workspace']}")
+
+# 派生给 pod_setup.sh 用的三个变量
+m = (c.get("model") or {})
+name = m.get("name") or "Qwen/Qwen3-VL-32B-Instruct"
+nl = name.lower()
+# 保守估算权重磁盘占用（GB）；yaml 里可通过 model.weights_gb 显式覆盖
+if   "qwen3-vl-32b"  in nl and "fp8" in nl: size = 35
+elif "qwen3-vl-32b"  in nl:                 size = 67
+elif "122b"          in nl and "awq" in nl: size = 68
+elif "122b"          in nl and "fp8" in nl: size = 122
+elif "122b"          in nl:                 size = 234
+else:                                       size = int(m.get("weights_gb") or 70)
+slug = name.rsplit("/", 1)[-1].lower()
+# 优先 yaml 里显式 model.path；否则默认 Network Volume /workspace/models/<slug>
+mdir = m.get("path") or f"/workspace/models/{slug}"
+print(f"MODEL_NAME={name}")
+print(f"MODEL_SIZE_GB={size}")
+print(f"MODEL_DIR={mdir}")
 PY
 )"
 
-echo "  Pod: ${POD_USER}@${POD_HOST}:${POD_PORT}  workspace=${POD_WS}"
+echo "  Pod:   ${POD_USER}@${POD_HOST}:${POD_PORT}  workspace=${POD_WS}"
+echo "  Model: ${MODEL_NAME} (~${MODEL_SIZE_GB} GB) → ${MODEL_DIR}"
 
 # 远端命令：如果 pod_setup 标志文件不存在就跑一次安装，然后后台跑 runner
 REMOTE_CMD="set -e; cd '${POD_WS}'; \
@@ -33,7 +52,12 @@ REMOTE_CMD="set -e; cd '${POD_WS}'; \
   if [ ! -x \"\$VENV_PY\" ]; then \
     echo '首次 setup 环境（venv 不存在）...'; \
     rm -f .pod_setup_done; \
-    bash tools/pod_setup.sh && touch .pod_setup_done; \
+    MODEL_NAME='${MODEL_NAME}' MODEL_SIZE_GB='${MODEL_SIZE_GB}' MODEL_DIR='${MODEL_DIR}' \
+      bash tools/pod_setup.sh && touch .pod_setup_done; \
+  elif [ ! -f .pod_setup_done ]; then \
+    echo 'venv 在但没 .pod_setup_done（可能上次只装了依赖没下模型），补跑 pod_setup...'; \
+    MODEL_NAME='${MODEL_NAME}' MODEL_SIZE_GB='${MODEL_SIZE_GB}' MODEL_DIR='${MODEL_DIR}' \
+      bash tools/pod_setup.sh && touch .pod_setup_done; \
   fi; \
   if [ ! -x \"\$VENV_PY\" ]; then \
     echo \"[ERR] 跑完 pod_setup.sh 后 \$VENV_PY 仍不存在。手动 ssh 进 Pod 看 tools/pod_setup.sh 的报错。\"; exit 1; \
