@@ -47,6 +47,12 @@ model:
     image: 8
   # 单卡 H100/H200 → 1；租 2× A100 或 2× H100 做 TP → 2
   tensor_parallel_size: 1
+  # ── 极限省显存开关（H100 80GB 跑 122B 容易 OOM 时启用，H200 不需要）──
+  # enforce_eager: true 关闭 CUDA graph 捕获，省 2-3 GB 显存，代价是推理
+  #                    慢 10-15%。最小测试可以开，生产建议上 H200 再关掉。
+  enforce_eager: false
+  # 并发请求上限：默认 256 会预留很大 KV 池；单机测试 2-4 够了
+  max_num_seqs: 4
 
 filters:
   shot_categories: [single, dominant]   # 先只跑人物特写

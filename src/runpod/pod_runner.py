@@ -118,6 +118,15 @@ def _build_llm_kwargs(model_cfg: dict[str, Any]) -> dict[str, Any]:
                 f"tensor_parallel_size={tp} 但 CUDA_VISIBLE_DEVICES 只看到 "
                 f"{seen} 张卡；vLLM 很可能会报错。"
             )
+
+    # 省显存开关（用于 H100 80GB 跑 122B 这种极限情况）
+    # enforce_eager=True：关闭 CUDA graph 捕获，省 2-3 GB，推理慢 ~10-15%
+    # max_num_seqs：限制并发请求数，直接影响 KV 池大小（默认 256 通常过大）
+    if bool(model_cfg.get("enforce_eager", False)):
+        kwargs["enforce_eager"] = True
+    max_num_seqs = model_cfg.get("max_num_seqs")
+    if max_num_seqs:
+        kwargs["max_num_seqs"] = int(max_num_seqs)
     return kwargs
 
 
