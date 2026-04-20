@@ -31,9 +31,11 @@ model:
   # 本地预下载路径（可选）；为 null 时 vLLM 走 HuggingFace hub
   # 建议路径：/workspace/models/qwen3-vl-32b-instruct
   path: null
-  # 3 轮推理每轮独立 context；R2 是最紧的（video + face crops），20480 给余量
-  max_model_len: 20480
-  gpu_memory_utilization: 0.9   # bf16 用 0.9；fp8 可调到 0.95
+  # 3 轮推理每轮独立 context。H100 80GB + 32B BF16 (~64GB weights) + util=0.9 时
+  # KV cache 只剩 ~4.3 GB，够 16384 token（实测 vLLM 自算上限 17616）；20480 会
+  # ValueError: "KV cache memory (4.3 GiB) < needed (5.0 GiB)"。H200 141GB 可放宽。
+  max_model_len: 16384
+  gpu_memory_utilization: 0.92  # 0.9 → 0.92 多挤 ~0.8 GB 给 KV；bf16 建议 ≤0.94
   # 原生 video 模式下 vLLM 内部会把视频切成多图：image 给大，video=1 每次发 1 个视频
   limit_mm_per_prompt:
     image: 64
@@ -55,12 +57,16 @@ sampling:
   top_p:                 0.9
   repetition_penalty:    1.05
   # ── 三轮推理的 output 预算（R1 body / R2 face / R3 scene+interaction）──
-  # R1 body: 3 人 shot ~5-6K token 足；R2 face: 3 人 ~3-4K；R3 scene: ≤2K
-  max_tokens_round1:     8192
-  max_tokens_round2:     6144
-  max_tokens_round3:     4096
+  # 必须满足 input + output ≤ max_model_len (16384)：
+  #   R1：video ~4K + system 800 + hint 1500 + out 6144 ≈ 12.5K ✓
+  #   R2：video ~4K + system 800 + crops 1.6K + hint 2.5K + out 4096 ≈ 13K ✓
+  #   R3：video ~4K + system 800 + hint 400 + out 3072 ≈ 8.3K ✓
+  # 实测 3 人 shot body ~5-6K、face ~3-4K、scene ≤2K，都能放下
+  max_tokens_round1:     6144
+  max_tokens_round2:     4096
+  max_tokens_round3:     3072
   # 兼容旧单轮路径（暂时保留）
-  max_tokens:            8192
+  max_tokens:            6144
 
   # ══════════════════════════════════════════════════════════════
   # 采帧 & 视频输入（核心质量参数）
