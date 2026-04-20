@@ -65,7 +65,7 @@ sampling:
   # R1 per-person 每次只出 1 人 body (~3K tok) → 不会被 N 人膨胀撑爆。
   # N=3 shot 跑 3 次 R1，vLLM prefix caching 让 video embed 只算一次。
   max_tokens_round1:     4096
-  max_tokens_round2:     4096
+  max_tokens_round2:     6144
   max_tokens_round3:     3072
   # 兼容旧单轮路径（暂时保留）
   max_tokens:            8192

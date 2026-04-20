@@ -22,6 +22,12 @@ Fixes applied:
        to enforce this required nested bool; see Pod log 2026-04-20 04:51).
   C. ``persons[].face_analysis.facial_attributes.{glasses,mask,makeup_visible}``:
      - coerce string degree words (``subtle``/``light``/``heavy``) → bool.
+  D. ``persons[].body_analysis.action_quality.{tempo,tone,intensity}``:
+     - drop/null any value that contains a camera/cinematography term
+       (static/tracking/pan/handheld/steady/etc.). Those terms describe
+       the camera, not the subject's action. See Pod log 2026-04-20
+       05:40 shot_0036 for ``tempo='static'`` → ``camera_term_in_action``
+       hard error.
 
 The ``VALID_*`` sets mirror ``src/runpod/schemas.py:47-51`` — if the
 Literal enums in schemas.py ever change, update this file too (no
@@ -38,6 +44,7 @@ __all__ = [
     "fix_interaction",
     "fix_face_clearly_visible",
     "fix_facial_attribute_bools",
+    "fix_action_quality_camera_terms",
 ]
 
 VALID_COUNTS:    frozenset[str] = frozenset({"solo", "dyadic", "triadic", "crowd"})
@@ -81,6 +88,47 @@ STR_TO_BOOL: dict[str, bool] = {
     "heavy": True, "strong": True, "moderate": True, "present": True,
     "false": False, "no": False, "n": False, "off": False,
     "none": False, "n/a": False, "na": False, "absent": False, "": False,
+}
+
+# Camera/cinematography terms that must not appear in
+# ``body_analysis.action_quality.{tempo,tone,intensity}`` because they
+# describe the camera, not the subject. Mirrors ShotValidator's
+# ``CAMERA_TERMS_FALLBACK`` (validate_body_analysis.py:103-118). Kept
+# here as a lowercased set for O(1) membership checks.
+ACTION_CAMERA_TERMS: frozenset[str] = frozenset({
+    "close-up", "close up", "closeup", "medium shot", "wide shot",
+    "medium-shot", "wide-shot", "medium close-up", "medium close up",
+    "extreme close-up", "long shot", "establishing shot",
+    "eye-level", "eye level", "low angle", "low-angle",
+    "high angle", "high-angle", "dutch", "dutch angle",
+    "overhead", "bird's eye", "frontal", "side view",
+    "profile", "profile view",
+    "steady", "steadicam", "handheld", "hand-held",
+    "static", "tracking", "tracking shot",
+    "pan", "panning", "tilt", "tilting",
+    "zoom", "zooming", "dolly", "crane", "crane shot",
+    "aerial", "pov", "point of view",
+    "over the shoulder", "ots", "two-shot",
+    "insert", "cutaway", "reverse", "reaction shot",
+})
+
+# Safe-substitution map for common VLM mistakes on action_quality.tempo:
+# VLM often uses camera vocab to describe a motionless subject.
+TEMPO_CAMERA_TO_BODY: dict[str, str | None] = {
+    "static":    "minimal",   # motionless subject
+    "tracking":  "sustained",
+    "steady":    "steady-flow",
+    "pan":       None,
+    "handheld":  None,
+    "hand-held": None,
+    "tilt":      None,
+    "tilting":   None,
+    "zoom":      None,
+    "zooming":   None,
+    "dolly":     None,
+    "crane":     None,
+    "aerial":    None,
+    "pov":       None,
 }
 
 
@@ -234,6 +282,65 @@ def fix_facial_attribute_bools(obj: dict[str, Any]) -> int:
     return fixes
 
 
+def _contains_camera_term(value: str) -> bool:
+    """Return True if the lowercased string contains any camera term."""
+    v = value.strip().lower()
+    if not v:
+        return False
+    if v in ACTION_CAMERA_TERMS:
+        return True
+    return any(term in v for term in ACTION_CAMERA_TERMS)
+
+
+def fix_action_quality_camera_terms(obj: dict[str, Any]) -> int:
+    """Scrub camera terms from ``body_analysis.action_quality.{tempo,tone}``.
+
+    ShotValidator raises ``camera_term_in_action`` as a CRITICAL error
+    when cinematography vocabulary appears in these body-describing
+    fields. We first try a safe substitution (e.g. ``static`` →
+    ``minimal`` for a motionless body), then fall back to ``None``.
+
+    ``intensity`` is a Literal enum already, so we only check it for
+    consistency with future expansion (currently it wouldn't match
+    camera terms).
+
+    Returns the number of field-level fixes applied.
+    """
+    fixes = 0
+    persons = obj.get("persons")
+    if not isinstance(persons, list):
+        return 0
+
+    for p in persons:
+        if not isinstance(p, dict):
+            continue
+        body = p.get("body_analysis")
+        if not isinstance(body, dict):
+            continue
+        aq = body.get("action_quality")
+        if not isinstance(aq, dict):
+            continue
+
+        for key in ("tempo", "tone"):
+            v = aq.get(key)
+            if not isinstance(v, str) or not v.strip():
+                continue
+            if not _contains_camera_term(v):
+                continue
+            # Try substitution (tempo has the most common offenders).
+            replaced = False
+            if key == "tempo":
+                v_low = v.strip().lower()
+                if v_low in TEMPO_CAMERA_TO_BODY:
+                    aq[key] = TEMPO_CAMERA_TO_BODY[v_low]
+                    replaced = True
+            if not replaced:
+                aq[key] = None
+            fixes += 1
+
+    return fixes
+
+
 def post_fix_compliance(
     obj: dict[str, Any],
     log: logging.Logger | None = None,
@@ -245,11 +352,13 @@ def post_fix_compliance(
     n_inter = fix_interaction(obj)
     n_gate  = fix_face_clearly_visible(obj)
     n_bool  = fix_facial_attribute_bools(obj)
-    total = n_inter + n_gate + n_bool
+    n_cam   = fix_action_quality_camera_terms(obj)
+    total = n_inter + n_gate + n_bool + n_cam
     if log is not None and total > 0:
         shot_id = obj.get("shot_id", "?")
         log.info(
             f"[post-fix] {shot_id}: interaction={n_inter} "
-            f"face_gate={n_gate} face_bools={n_bool} total={total}"
+            f"face_gate={n_gate} face_bools={n_bool} "
+            f"action_camera={n_cam} total={total}"
         )
     return obj

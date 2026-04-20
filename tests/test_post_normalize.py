@@ -13,6 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.runpod.post_normalize import (  # noqa: E402
+    fix_action_quality_camera_terms,
     fix_face_clearly_visible,
     fix_facial_attribute_bools,
     fix_interaction,
@@ -342,6 +343,78 @@ class TestFixFacialAttributeBools(unittest.TestCase):
         )
 
 
+class TestFixActionQualityCameraTerms(unittest.TestCase):
+
+    def _body(self, action_quality: dict) -> dict:
+        return {
+            "persons": [{"body_analysis": {"action_quality": action_quality}}]
+        }
+
+    def test_tempo_static_substituted_with_minimal(self):
+        # Pod 2026-04-20 05:40 shot_0036 root cause: VLM used 'static'
+        # for a motionless subject, triggering camera_term_in_action.
+        obj = self._body({"intensity": "low", "tempo": "static", "tone": "tense"})
+        fixes = fix_action_quality_camera_terms(obj)
+        self.assertEqual(fixes, 1)
+        self.assertEqual(
+            obj["persons"][0]["body_analysis"]["action_quality"]["tempo"],
+            "minimal",
+        )
+
+    def test_tempo_tracking_substituted_with_sustained(self):
+        obj = self._body({"tempo": "tracking"})
+        fix_action_quality_camera_terms(obj)
+        self.assertEqual(
+            obj["persons"][0]["body_analysis"]["action_quality"]["tempo"],
+            "sustained",
+        )
+
+    def test_tempo_unknown_camera_term_to_none(self):
+        obj = self._body({"tempo": "pan"})
+        fix_action_quality_camera_terms(obj)
+        self.assertIsNone(
+            obj["persons"][0]["body_analysis"]["action_quality"]["tempo"],
+        )
+
+    def test_tone_with_camera_term_to_none(self):
+        # 'tone' has no safe substitution map.
+        obj = self._body({"tone": "static"})
+        fix_action_quality_camera_terms(obj)
+        self.assertIsNone(
+            obj["persons"][0]["body_analysis"]["action_quality"]["tone"],
+        )
+
+    def test_tempo_embedded_camera_term(self):
+        # VLM sometimes writes "static hold" — also banned (contains a term).
+        obj = self._body({"tempo": "static hold"})
+        fixes = fix_action_quality_camera_terms(obj)
+        self.assertEqual(fixes, 1)
+        # Full-string not in substitution map → None
+        self.assertIsNone(
+            obj["persons"][0]["body_analysis"]["action_quality"]["tempo"],
+        )
+
+    def test_clean_tempo_untouched(self):
+        obj = self._body({"tempo": "fast", "tone": "urgent"})
+        self.assertEqual(fix_action_quality_camera_terms(obj), 0)
+        self.assertEqual(
+            obj["persons"][0]["body_analysis"]["action_quality"]["tempo"],
+            "fast",
+        )
+
+    def test_none_tempo_untouched(self):
+        obj = self._body({"tempo": None, "tone": None})
+        self.assertEqual(fix_action_quality_camera_terms(obj), 0)
+
+    def test_missing_action_quality_no_crash(self):
+        obj = {"persons": [{"body_analysis": {}}]}
+        self.assertEqual(fix_action_quality_camera_terms(obj), 0)
+
+    def test_empty_string_tempo_untouched(self):
+        obj = self._body({"tempo": ""})
+        self.assertEqual(fix_action_quality_camera_terms(obj), 0)
+
+
 class TestPostFixCompliance(unittest.TestCase):
 
     def test_full_shot_fixture_passes(self):
@@ -360,10 +433,13 @@ class TestPostFixCompliance(unittest.TestCase):
                         "expression_confidence": 0.9,
                         "facial_attributes": {"makeup_visible": "subtle"},
                     },
-                    "body_analysis": {"interaction": {
-                        "count": 0, "contact": False, "relation": "independent",
-                        "interacts_with_person_index": [],
-                    }},
+                    "body_analysis": {
+                        "action_quality": {"intensity": "low", "tempo": "static"},
+                        "interaction": {
+                            "count": 0, "contact": False, "relation": "independent",
+                            "interacts_with_person_index": [],
+                        },
+                    },
                 },
                 {
                     "person_index": 1,
@@ -372,12 +448,15 @@ class TestPostFixCompliance(unittest.TestCase):
                         "primary_emotion": "sadness",
                         "expression_confidence": 0.95,
                     },
-                    "body_analysis": {"interaction": {
-                        "count": 1,
-                        "contact": "self-contact (hand to face)",
-                        "relation": "self-directed",
-                        "interacts_with_person_index": [],
-                    }},
+                    "body_analysis": {
+                        "action_quality": {"intensity": "mid", "tempo": "pan"},
+                        "interaction": {
+                            "count": 1,
+                            "contact": "self-contact (hand to face)",
+                            "relation": "self-directed",
+                            "interacts_with_person_index": [],
+                        },
+                    },
                 },
             ],
         }
@@ -403,6 +482,16 @@ class TestPostFixCompliance(unittest.TestCase):
                 "makeup_visible"
             ],
             True,
+        )
+
+        # action_quality.tempo: 'static' → 'minimal' (safe substitution),
+        # 'pan' → None (no substitution available).
+        self.assertEqual(
+            obj["persons"][0]["body_analysis"]["action_quality"]["tempo"],
+            "minimal",
+        )
+        self.assertIsNone(
+            obj["persons"][1]["body_analysis"]["action_quality"]["tempo"],
         )
 
     def test_empty_persons_list_no_crash(self):
