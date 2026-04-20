@@ -96,6 +96,7 @@ pip install \
     "pydantic>=2" \
     "pyyaml>=6" \
     "rich" \
+    "opencv-python-headless>=4.8" \
     "huggingface_hub[cli]>=0.24"
 
 # 5) 模型下载 —— 默认去 Network Volume（/workspace/models/...）

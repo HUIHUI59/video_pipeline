@@ -29,8 +29,9 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from src.runpod.schemas import (  # noqa
     ManifestEntry, ShotLabel,
-    Round1Label, Round2Label,
+    Round1BodyLabel, Round2Label, Round3ShotLabel,
 )
+from src.runpod.face_crops import detect_and_crop_faces  # noqa
 
 import yaml
 
@@ -157,6 +158,25 @@ def _build_llm_kwargs(model_cfg: dict[str, Any]) -> dict[str, Any]:
     if max_num_seqs:
         kwargs["max_num_seqs"] = int(max_num_seqs)
     return kwargs
+
+
+def _build_video_message(video_path: Path, fps: int,
+                          max_pixels: int, min_pixels: int) -> dict[str, Any]:
+    """Build vLLM OpenAI-chat API content block for a local video file.
+
+    vLLM 0.19+ 支持在 chat messages 里发 video_url（`file://` 协议 + 绝对路径），
+    Qwen3-VL preprocessor 会按 fps 均匀采样、在 embedding 里插时间戳 token
+    (<t=0.0s>, <t=0.2s>...)，让模型做真正的时序推理而不是把多帧当同等重要
+    的孤立图。max_pixels/min_pixels 控制单帧 patch 数 → 单 shot 总 token。
+    """
+    return {
+        "type": "video_url",
+        "video_url": {"url": f"file://{video_path.resolve()}"},
+        # 下列 kwargs 由 vLLM 的 Qwen3-VL 多模态处理器识别
+        "fps": fps,
+        "max_pixels": max_pixels,
+        "min_pixels": min_pixels,
+    }
 
 
 def _save_failed(out_root: Path, slug: str, raw_text: str, reason: str,
@@ -496,9 +516,10 @@ def main() -> int:
             log.warning(f"[dry-run-model-load] 无法读取 cuda 显存：{ex}")
         return 0
 
-    # 两轮推理的两份 schema（docs/problem/01_stage5_output_truncation.md 方案 E）
-    schema_r1 = Round1Label.model_json_schema()
+    # 三轮推理的 schema：R1 body / R2 face / R3 scene+interaction
+    schema_r1 = Round1BodyLabel.model_json_schema()
     schema_r2 = Round2Label.model_json_schema()
+    schema_r3 = Round3ShotLabel.model_json_schema()
 
     def _build_sampling(schema: dict, max_tokens: int, round_label: str) -> SamplingParams:
         """结构化输出 API 按新→旧依次尝试；全失败降级无约束。
@@ -555,14 +576,29 @@ def main() -> int:
                     f" max_tokens={max_tokens} 给足余量。")
         return SamplingParams(**base_kwargs)
 
-    # 两轮各自的 output 预算：
-    #   - Round 1 （body + scene + meta，无 face）：实测 2 人 ~3500-4500 token，给 6144
-    #   - Round 2 （face_analysis only，按 person 对齐）：2 人 ~5000 token，给 6144
-    max_tokens_r1 = int(samp.get("max_tokens_round1", 6144))
+    # 三轮各自的 output 预算：
+    #   - Round 1 （body_analysis per person）：3 人 shot ~5-6K token
+    #   - Round 2 （face_analysis only，按 person 对齐）：3 人 ~3-4K token
+    #   - Round 3 （shot_context + interaction + quality + usability）：≤2K token
+    max_tokens_r1 = int(samp.get("max_tokens_round1", 8192))
     max_tokens_r2 = int(samp.get("max_tokens_round2", 6144))
+    max_tokens_r3 = int(samp.get("max_tokens_round3", 4096))
     sampling_r1 = _build_sampling(schema_r1, max_tokens_r1, "Round1-body")
     sampling_r2 = _build_sampling(schema_r2, max_tokens_r2, "Round2-face")
+    sampling_r3 = _build_sampling(schema_r3, max_tokens_r3, "Round3-scene")
     resize_shortest = int(samp.get("resize_shortest", 448))
+
+    # 视频输入模式：video_mode=true 时直接发 video_url 给 Qwen3-VL，preprocessor
+    # 按 sample_fps 自动采样 + 插时间戳。false 时走老路径用 decord 采帧发图片列表。
+    video_mode     = bool(samp.get("video_mode", False))
+    video_fps      = int(samp.get("video_fps", 5))
+    video_max_pix  = int(samp.get("video_max_pixels", 112896))
+    video_min_pix  = int(samp.get("video_min_pixels", 50176))
+    if video_mode:
+        log.info(f"video_mode=true：发 video_url 给 vLLM，fps={video_fps}, "
+                 f"max_pixels={video_max_pix}, min_pixels={video_min_pix}")
+    else:
+        log.info(f"video_mode=false：走老路径（decord 采固定帧数发图片列表）")
 
     ok = bad = 0
     for e in todo:
@@ -579,60 +615,70 @@ def main() -> int:
             log.warning(f"[skip] 本地视频不存在: {video}")
             continue
 
-        n_frames = _frame_count_for_category(e.shot_category, samp)
-        try:
-            frames = _sample_frames(str(video), n_frames, resize_shortest)
-        except Exception as ex:
-            log.warning(f"[skip] 采帧失败 {e.shot_id}: {ex}")
-            continue
-
         # 构造 prompt：system 通用 + user 按 category 取模板再填 shot 信息
         cat_key = _category_for_prompt(e.shot_category)
         user_text = _fill_user_template(user_templates[cat_key], e)
 
-        image_parts = [{"type": "image_url",
-                        "image_url": {"url": _pil_to_data_url(im)}}
-                       for im in frames]
+        if video_mode:
+            # 原生 video 模式：vLLM preprocessor 按 video_fps 自动采样 + 插时间戳
+            # n_frames 只是给 meta.frames_used 记账用；实际帧数 = duration × fps
+            n_frames = max(1, int(round((e.duration_sec or 1.0) * video_fps)))
+            try:
+                video_part = _build_video_message(
+                    video, fps=video_fps,
+                    max_pixels=video_max_pix, min_pixels=video_min_pix)
+            except Exception as ex:
+                log.warning(f"[skip] 构建 video_message 失败 {e.shot_id}: {ex}")
+                continue
+            # 三轮共享 video content（vLLM prefix caching 能省重复 embed）
+            content_base = [video_part]
+        else:
+            # 老路径：自己采帧发图片列表
+            n_frames = _frame_count_for_category(e.shot_category, samp)
+            try:
+                frames = _sample_frames(str(video), n_frames, resize_shortest)
+            except Exception as ex:
+                log.warning(f"[skip] 采帧失败 {e.shot_id}: {ex}")
+                continue
+            image_parts = [{"type": "image_url",
+                            "image_url": {"url": _pil_to_data_url(im)}}
+                           for im in frames]
+            content_base = image_parts
 
         # ── Round 1：body + scene + interaction + quality + usability ──
         # system_prompt 保持 delivery_v1 原版；user_text 末尾追加硬指令：本轮只出 body
         # 结构化约束在 MoE 量化 kernel 上不能 enforce，所以这里用硬指令 + 结构
         # 示例强 nudge VLM 输出规范 JSON 嵌套。
         r1_hint = (
-            "\n\nCRITICAL ROUND 1 INSTRUCTION: For this round, DO NOT output "
-            "face_analysis for any person. The output schema for this round "
-            "excludes face_analysis entirely — focus on body_analysis, "
-            "shot_context, interaction, quality_flags, usability_score. "
-            "Face analysis will be done in a separate focused round.\n\n"
-            "STRICT STRUCTURAL REQUIREMENTS (do NOT flatten, do NOT stringify):\n"
-            '  - body_analysis.alternative_captions MUST be an OBJECT with '
-            'exactly 4 keys {"direct": "...", "literary": "...", '
-            '"direction": "...", "situational": "..."}, NOT a list/array.\n'
-            '  - body_analysis.kinematics_hint MUST be an OBJECT with keys '
-            '{"trajectory": "...", "periodicity": "periodic|non_periodic", '
-            '"symmetry": "bilateral_symmetric|bilateral_asymmetric|axial", '
-            '"duration_class": "..."}, NOT a single word string like "static".\n'
-            '  - body_analysis.action_quality MUST be an OBJECT with keys '
-            '{"intensity": "low|mid|high", "tone": "...", "tempo": "..."}, '
-            'NOT a string.\n'
-            '  - body_analysis.upper_body_detail MUST be an OBJECT with 7 '
-            'string fields (head, neck, shoulders, arms, hands, torso, '
-            'posture).\n'
-            '  - quality_flags MUST include booleans/enums; vlm_confidence '
-            'MUST be a number in [0,1] (not a string like "high").\n'
-            '  - usability_score MUST be {"face": <number>, "motion": '
-            '<number>}, both in [0,1]. Do not add extra keys like "emotion" '
-            'or "overall".\n\n'
+            "\n\nCRITICAL ROUND 1 INSTRUCTION: This is Round 1 of 3. In this "
+            "round, output ONLY persons[] array with body_analysis + "
+            "person_index + spatial_position for each person. DO NOT output "
+            "face_analysis, shot_context, interaction, quality_flags, "
+            "usability_score, or meta — those are handled in later rounds.\n\n"
+            "STRICT STRUCTURAL REQUIREMENTS for body_analysis (do NOT flatten, "
+            "do NOT stringify objects):\n"
+            '  - alternative_captions MUST be an OBJECT with exactly 4 keys '
+            '{"direct": "...", "literary": "...", "direction": "...", '
+            '"situational": "..."}, NOT a list/array.\n'
+            '  - kinematics_hint MUST be an OBJECT: {"trajectory": "...", '
+            '"periodicity": "periodic|non_periodic", "symmetry": '
+            '"bilateral_symmetric|bilateral_asymmetric|axial", '
+            '"duration_class": "..."}, NOT a single word like "static".\n'
+            '  - action_quality MUST be an OBJECT: {"intensity": "low|mid|high", '
+            '"tone": "...", "tempo": "..."}, NOT a string.\n'
+            '  - upper_body_detail MUST be an OBJECT with 7 string fields '
+            '(head, neck, shoulders, arms, hands, torso, posture).\n'
+            '  - gesture_detail MUST be a specific string, not "none" or '
+            '"not applicable".\n\n'
             "TOKEN BUDGET IS STRICT. Output COMPACT JSON on minimal lines: "
             "NO pretty-printing, NO 4-space indentation, NO unnecessary "
-            "whitespace. Keep every string description CONCISE — "
-            "motion_caption under 80 words, each alternative_caption under "
-            "40 words. If in doubt, write less, not more."
+            "whitespace. Keep motion_caption under 80 words, each "
+            "alternative_caption under 40 words. If in doubt, write less."
         )
         messages_r1 = [
             {"role": "system", "content": system_prompt},
             {"role": "user",   "content": [
-                *image_parts,
+                *content_base,
                 {"type": "text", "text": user_text + r1_hint},
             ]},
         ]
@@ -764,11 +810,57 @@ def main() -> int:
                 "CONCISE — expression_caption under 60 words, each "
                 "alternative_caption under 40 words. If in doubt, write less."
             )
+            # ── Face crop 附加（可选）──
+            # 在采样帧上用 Haar/YOLO 检测脸，裁 224px crop 一起送给 Round 2。
+            # 不影响 content_base 里的 video（完整上下文仍在），VLM 可同时
+            # 看到 shot 全貌 + 高分辨率脸部细节。token 成本增加 ~200×N，
+            # 换来 facial_components / observable_blendshape_hints 准确度提升。
+            face_crop_parts: list[dict] = []
+            face_crop_order: list[str] = []
+            if bool(samp.get("face_crop_enabled", False)):
+                try:
+                    fc_fps    = int(samp.get("face_crop_sample_fps", 2))
+                    fc_size   = int(samp.get("face_crop_size", 224))
+                    fc_max    = int(samp.get("face_crop_per_frame_max", 4))
+                    fc_back   = str(samp.get("face_detector", "haar"))
+                    fc_yolo_w = samp.get("yolo_face_weights")
+                    crops = detect_and_crop_faces(
+                        str(video), fps=fc_fps, crop_size=fc_size,
+                        max_per_frame=fc_max, backend=fc_back,
+                        yolo_weights=fc_yolo_w)
+                    for ts_sec, slot, crop_img in crops:
+                        face_crop_parts.append({
+                            "type": "image_url",
+                            "image_url": {"url": _pil_to_data_url(crop_img)},
+                        })
+                        face_crop_order.append(f"t={ts_sec:.1f}s-slot{slot}")
+                    log.info(f"[info] {e.shot_id} 附加 {len(face_crop_parts)} "
+                             f"张 face crop (fps={fc_fps}, size={fc_size})")
+                except Exception as ex:
+                    log.warning(f"[warn] face_crops 生成失败 {e.shot_id}: {ex}")
+                    face_crop_parts = []
+                    face_crop_order = []
+
+            # 在 user_text 末尾追加一段说明（如果有 crop）
+            if face_crop_parts:
+                face_user_text_with_crops = face_user_text + (
+                    "\n\n=== FACE CROPS BELOW ===\n"
+                    f"The next {len(face_crop_parts)} images are face close-ups "
+                    f"({fc_size}×{fc_size} each) auto-detected from the same "
+                    "video. They are ordered by (timestamp, slot) where slot=0 "
+                    "is the largest face in that frame. Use these for detailed "
+                    "facial_components and observable_blendshape_hints "
+                    "analysis. Crop order: " + ", ".join(face_crop_order)
+                )
+            else:
+                face_user_text_with_crops = face_user_text
+
             messages_r2 = [
                 {"role": "system", "content": system_prompt},
                 {"role": "user",   "content": [
-                    *image_parts,
-                    {"type": "text", "text": face_user_text},
+                    *content_base,
+                    *face_crop_parts,
+                    {"type": "text", "text": face_user_text_with_crops},
                 ]},
             ]
             try:
@@ -835,7 +927,70 @@ def main() -> int:
                 for i, p in enumerate(persons_r1):
                     p.setdefault("face_analysis", None)
 
-        infer_ms = infer_ms_r1 + infer_ms_r2
+        # ── Round 3：shot_context + interaction + quality_flags + usability_score ──
+        # Round 1 的 schema 已经缩到 "只出 persons[].body_analysis"，所以场景级
+        # 字段必须靠 R3 生成。同一段视频用 prefix caching，embed 不重复计算。
+        r3_user_text = (
+            f"You have already analyzed this {e.duration_sec:.1f}s video shot. "
+            f"{len(persons_r1)} person(s) were identified. Now output ONLY the "
+            f"shot-level metadata (no persons[] array):\n"
+            "  - shot_context: {shot_type, shot_emotion_summary, "
+            "shot_motion_summary, scene_context: {visible_setting, "
+            "narrative_situation, narrative_confidence}}\n"
+            "  - interaction: {count, contact, relation}\n"
+            "  - quality_flags: all 8 fields (face_clearly_visible, "
+            "body_clearly_visible, motion_blur, occlusion, lighting, "
+            "camera_stable, frame_sampling_ok, vlm_confidence)\n"
+            "  - usability_score: {face, motion}, both numbers in [0,1]\n\n"
+            "STRICT: do NOT output persons[] or any face_analysis / body_analysis. "
+            "Output COMPACT JSON, minimal whitespace. shot_emotion_summary and "
+            "shot_motion_summary each 1-2 sentences; scene_context.visible_setting "
+            "1 sentence; narrative_situation null if narrative_confidence<0.3."
+        )
+        messages_r3 = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user",   "content": [
+                *content_base,
+                {"type": "text", "text": r3_user_text},
+            ]},
+        ]
+        raw_r3 = ""
+        infer_ms_r3 = 0
+        try:
+            log.info(f"[info] {e.shot_id} 开始 Round 3 scene/interaction 推理")
+            t3 = time.time()
+            _hb_set(f"{e.shot_id} Round 3 推理", detail="scene+interaction+quality")
+            res_r3 = llm.chat(messages_r3, sampling_r3, use_tqdm=False)
+            _hb_set(None)
+            raw_r3 = res_r3[0].outputs[0].text
+            infer_ms_r3 = int((time.time() - t3) * 1000)
+            log.info(f"[info] {e.shot_id} Round 3 完成 ({infer_ms_r3}ms, "
+                     f"{len(raw_r3)} chars)")
+        except Exception as ex:
+            _hb_set(None)
+            log.error(f"[ERR] Round3 推理失败 {e.shot_id}: {ex}")
+            _save_failed(out_root, slug, raw_r3 or "", f"round3_inference_crash: {ex}")
+            bad += 1
+            continue
+
+        # 3a) Round 3 JSON 解析 + 合并到 obj 顶层
+        try:
+            r3_obj = json.loads(raw_r3)
+        except Exception as ex:
+            log.error(f"[ERR parse-r3] {e.shot_id}: {ex}")
+            _save_failed(out_root, slug, raw_r3, f"json_parse_round3: {ex}")
+            bad += 1
+            continue
+        obj["shot_id"]         = e.shot_id
+        obj["source_movie"]    = e.source_movie
+        obj["shot_context"]    = r3_obj.get("shot_context")
+        obj["interaction"]     = r3_obj.get("interaction")
+        obj["quality_flags"]   = r3_obj.get("quality_flags")
+        obj["usability_score"] = r3_obj.get("usability_score")
+        if "exclusion_reason" in r3_obj:
+            obj["exclusion_reason"] = r3_obj["exclusion_reason"]
+
+        infer_ms = infer_ms_r1 + infer_ms_r2 + infer_ms_r3
 
         # 2) normalize_tags（动词归一、同义词、forbidden 镜头术语、intensity/tone 归轴）
         try:
@@ -875,10 +1030,14 @@ def main() -> int:
         obj["meta"]["repetition_penalty"]  = float(samp.get("repetition_penalty", 1.05))
         obj["meta"]["max_tokens_round1"]   = int(samp.get("max_tokens_round1", max_tokens_r1))
         obj["meta"]["max_tokens_round2"]   = int(samp.get("max_tokens_round2", max_tokens_r2))
+        obj["meta"]["max_tokens_round3"]   = int(samp.get("max_tokens_round3", max_tokens_r3))
         obj["meta"]["precision"]           = model_cfg.get("precision", "bf16")
         obj["meta"]["quantization"]        = model_cfg.get("quantization")
         obj["meta"]["tensor_parallel_size"] = int(model_cfg.get("tensor_parallel_size", 1))
         obj["meta"]["max_model_len"]       = int(model_cfg.get("max_model_len", 16384))
+        obj["meta"]["video_mode"]          = video_mode
+        if video_mode:
+            obj["meta"]["video_fps"]       = video_fps
 
         # 4) Pydantic 结构校验：ShotLabel 强制 root schema 完整性 + enum 合法。
         #    schemas.py 用 _Base(extra="allow") 宽容未来字段演进，但对 enum /

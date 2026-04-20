@@ -296,26 +296,25 @@ class ShotLabel(_Base):
 
 
 # ══════════════════════════════════════════════════════════════
-# 两轮推理的子 schema（docs/problem/01_stage5_output_truncation.md 方案 E）
-# Round 1：body + scene + meta；Round 2：face only，按 person_index 合并。
-# 每轮 output 预算 ≤ 6000 token，避免 max_tokens 截断。
+# 三轮推理的子 schema（2026-04-20 架构演进）
+#   Round 1 BODY  ：只出 persons[].body_analysis，每人独立 dict
+#   Round 2 FACE  ：只出 persons[].face_analysis，附 face crop 高清细节
+#   Round 3 SCENE ：只出 shot_context + interaction + quality_flags +
+#                   usability_score（整体场景元数据）
+# 合并由 pod_runner.main 负责；合并后跑 ShotLabel.model_validate + 16
+# 条 ShotValidator 业务规则。
 # ══════════════════════════════════════════════════════════════
 
-class Round1Person(_Base):
+class Round1BodyPerson(_Base):
+    """Round 1 每人输出：身体分析 + 位置信息（不含脸）。"""
     person_index:     int = Field(ge=0)
     spatial_position: SpatialPosition
     body_analysis:    Optional[BodyAnalysis] = None
 
 
-class Round1Label(_Base):
-    shot_id:          str
-    source_movie:     str
-    shot_context:     ShotContext
-    persons:          list[Round1Person]
-    interaction:      ShotInteraction
-    quality_flags:    QualityFlags
-    usability_score:  UsabilityScore
-    exclusion_reason: Optional[str] = None
+class Round1BodyLabel(_Base):
+    """Round 1 整体输出：只有 persons 列表。"""
+    persons: list[Round1BodyPerson]
 
 
 class Round2Person(_Base):
@@ -325,6 +324,15 @@ class Round2Person(_Base):
 
 class Round2Label(_Base):
     persons: list[Round2Person]
+
+
+class Round3ShotLabel(_Base):
+    """Round 3：shot 级元数据。VLM 只看视频 + R1 给出的 person 概览。"""
+    shot_context:     ShotContext
+    interaction:      ShotInteraction
+    quality_flags:    QualityFlags
+    usability_score:  UsabilityScore
+    exclusion_reason: Optional[str] = None
 
 
 # ══════════════════════════════════════════════════════════════

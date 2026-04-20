@@ -25,20 +25,25 @@ paths:
 
 model:
   name: Qwen/Qwen3-VL-32B-Instruct
-  precision: bf16            # bf16 (~66.7 GB，H100 80G OK) | fp8 (~35 GB) | awq | awq_marlin | gptq-int4
+  precision: bf16            # bf16 (~64 GB，H100 80G OK) | fp8 (~35 GB) | awq | awq_marlin | gptq-int4
   # 仅 AWQ / GPTQ 需要；bf16/fp8 留 null（vLLM 自动推导）
   quantization: null
   # 本地预下载路径（可选）；为 null 时 vLLM 走 HuggingFace hub
+  # 建议路径：/workspace/models/qwen3-vl-32b-instruct
   path: null
-  # Qwen3-VL-32B 原生 max_seq_len=262144（会要求 64GB KV cache，H100 80G 装不下）。
-  # 我们单 shot 实际用量 ~16K token 就够：system~800 + user~1600 + 8帧×1500 + out 2048
-  max_model_len: 16384
-  gpu_memory_utilization: 0.9   # vLLM 可用的显存比例。bf16 用到 0.9 较稳；fp8 可以调到 0.95
-  # 每次 chat 允许的图片上限（32B 可 16；122B 建议 8 以节省 KV）
+  # 3 轮推理每轮独立 context；R2 是最紧的（video + face crops），20480 给余量
+  max_model_len: 20480
+  gpu_memory_utilization: 0.9   # bf16 用 0.9；fp8 可调到 0.95
+  # 原生 video 模式下 vLLM 内部会把视频切成多图：image 给大，video=1 每次发 1 个视频
   limit_mm_per_prompt:
-    image: 16
+    image: 64
+    video: 1
   # 多卡推理（32B 单卡足够；122B 有时要 2）。设 1 = 单卡
   tensor_parallel_size: 1
+  # CUDA graph：32B 稳，false 即可；OOM 时改 true 省 2-3 GB 但慢 10-15%
+  enforce_eager: false
+  # 并发请求数：小批量 2-4 够；vLLM 默认 256 会过度预留 KV
+  max_num_seqs: 4
 
 filters:
   shot_categories: [single, dominant]   # 先只跑人物特写；改成 [] 则不过滤
@@ -48,12 +53,44 @@ filters:
 sampling:
   temperature:           0.2
   top_p:                 0.9
-  # 两轮推理分别的 output 预算（方案 E，见 docs/problem/01_stage5_output_truncation.md）
-  # 3 人 shot 的 body_analysis 一个人 ~3000 token，pretty-print 又吃 40%，给 10240 留足
-  max_tokens_round1:     10240
-  max_tokens_round2:     10240
-  max_tokens:            10240  # 兼容旧路径（如果以后回退单轮）
   repetition_penalty:    1.05
-  frames_single_dominant: 8   # single / dominant 采 8 帧
-  frames_multi_wide:      4   # multi / wide / landscape 采 4 帧
-  resize_shortest:        448 # Qwen3-VL 推荐短边
+  # ── 三轮推理的 output 预算（R1 body / R2 face / R3 scene+interaction）──
+  # R1 body: 3 人 shot ~5-6K token 足；R2 face: 3 人 ~3-4K；R3 scene: ≤2K
+  max_tokens_round1:     8192
+  max_tokens_round2:     6144
+  max_tokens_round3:     4096
+  # 兼容旧单轮路径（暂时保留）
+  max_tokens:            8192
+
+  # ══════════════════════════════════════════════════════════════
+  # 采帧 & 视频输入（核心质量参数）
+  # ══════════════════════════════════════════════════════════════
+  # video_mode: true  → 发 video_url 给 vLLM，让 Qwen3-VL 自己按 fps 采样
+  #                     + 插时间戳 token，时序推理最强，长短 shot 统一
+  #             false → 老路径：自己用 decord 采固定帧数后发 image_url 列表
+  video_mode: true
+  # vLLM 内部采样 fps；Qwen3-VL 默认 sample_fps=2，拉到 5 提高时间分辨率
+  video_fps: 5
+  # 单帧像素预算（控制每帧 token 数）。Qwen3-VL 用 28×28 patch + 4-neighbor merge：
+  #   256×256 ≈ 65 tok；336×336 ≈ 150 tok；448×448 ≈ 265 tok
+  video_max_pixels: 112896          # 336×336 上限
+  video_min_pixels: 50176           # 224×224 下限（vLLM 会自动缩到此范围）
+
+  # ── Face crop 附加（Round 2 高分辨率细节）──
+  # Pod 侧用 Stage 4 的 YOLO/Haar 在采样帧上检测脸，裁 224px 送 R2
+  # 效果：VLM 能看清眼眉嘴，facial_components / blendshape_hints 显著提升
+  face_crop_enabled: true
+  face_crop_size: 224               # 裁到 224×224
+  face_crop_per_frame_max: 4        # 每帧最多保留 4 张脸（按面积降序）
+  face_crop_sample_fps: 2           # 裁脸帧率（不用 5，2 足够覆盖表情动态）
+  face_detector: haar               # haar (cv2 内置) | yolo_face (需 yolov8n-face.pt)
+
+  # ── 老路径参数（video_mode=false 时使用）──
+  frames_single_dominant: 8
+  frames_multi_wide:      4
+  resize_shortest:        448
+
+  # ── 合规开关 ──
+  # 32B dense 模型的 structured outputs 稳定，不需要逃生口
+  disable_structured_output: false
+  disable_schema_validation: false
