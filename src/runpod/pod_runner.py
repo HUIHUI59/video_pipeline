@@ -33,6 +33,7 @@ from src.runpod.schemas import (  # noqa
     BodyAnalysis,
 )
 from src.runpod.face_crops import detect_and_crop_faces  # noqa
+from src.runpod.post_normalize import post_fix_compliance  # noqa
 
 import yaml
 
@@ -773,11 +774,14 @@ def main() -> int:
             "'background'\n"
             "  - face_analysis: full dict per delivery_v1 face spec\n\n"
             'Output ONLY: {"persons": [{"person_index": i, '
-            '"spatial_position": "...", "face_analysis": {...}}, ...]}. '
-            "If a person's face is not clearly visible (occluded or <3% "
-            "of frame), set face_clearly_visible=false and null the "
-            "other face_analysis fields for that person.\n\n"
+            '"spatial_position": "...", "face_analysis": {...}}, ...]}.\n\n'
+            "=== face_analysis — REQUIRED FIELDS + EXACT TYPES ===\n"
+            "face_clearly_visible is the FIRST and MANDATORY key in "
+            "face_analysis — include it always (bool). If the face is "
+            "occluded or <3% of frame, set face_clearly_visible=false "
+            "and null other face_analysis fields; do NOT omit the key.\n\n"
             "STRICT face_analysis STRUCTURE (do NOT flatten):\n"
+            "  - face_clearly_visible: bool — REQUIRED, never omit\n"
             "  - 9-class primary_emotion: anger|sadness|joy|fear|surprise|"
             "disgust|contempt|neutral|complex\n"
             "  - valence/arousal/intensity: NUMBERS in [-1,1] / [0,1] / "
@@ -786,9 +790,18 @@ def main() -> int:
             "direction, situational}, NOT an array\n"
             "  - facial_components: OBJECT with 6 keys (eyes, eyebrows, "
             "mouth, jaw, gaze_direction, head_pose)\n"
-            "  - facial_attributes: OBJECT with 8 keys (apparent_gender, "
-            "apparent_age_range, glasses, facial_hair, head_covering, "
-            "mask, makeup_visible, distinctive_notes)\n"
+            "  - facial_attributes: OBJECT with 8 keys — STRICT TYPES:\n"
+            "      apparent_gender: 'male'|'female'|'ambiguous' (string)\n"
+            "      apparent_age_range: 'child'|'teen'|'young_adult'|"
+            "'adult'|'middle_aged'|'elderly' (string)\n"
+            "      glasses: bool (true/false ONLY)\n"
+            "      facial_hair: string (e.g. 'none', 'stubble', 'beard')\n"
+            "      head_covering: string (e.g. 'none', 'hat', 'hood')\n"
+            "      mask: bool (true/false ONLY)\n"
+            "      makeup_visible: bool (true/false ONLY — NOT "
+            "'subtle'/'light'/'heavy'; use true for any visible makeup, "
+            "false for none)\n"
+            "      distinctive_notes: string\n"
             "  - observable_blendshape_hints: OBJECT with 15 enum keys, "
             "NOT a flat string\n"
             "  - temporal_change enum: static|building|peak_then_release|"
@@ -847,8 +860,22 @@ def main() -> int:
         # ── Round 1 per-person：每个 person 独立一次 body_analysis 推理 ──
         # 关键：per-person 调用 → 每次只出 1 人 body (~3K tok)，不会被
         # max_model_len 截断。vLLM prefix caching 让 video embed 复用。
+        #
+        # Prompt 强化（Phase 6 合规修复，2026-04-20）：
+        #   1) 注入 R3 已判定的 shot-level interaction 作为 anchor（count 必复制）
+        #   2) 注入 R2 发现的全部 persons roster，供 VLM 填 interacts_with_person_index
+        #   3) 显式列出 3 个 enum 全量值 + 反例，阻止 VLM 输出 int 0/1 或 "self-directed"
         body_by_index: dict[int, dict | None] = {}
         infer_ms_r1 = 0
+
+        shot_inter = r3_obj.get("interaction") or {}
+        shot_count_anchor    = shot_inter.get("count",    "dyadic")
+        shot_contact_anchor  = shot_inter.get("contact",  "none")
+        shot_relation_anchor = shot_inter.get("relation", "parallel")
+        persons_roster = ", ".join(
+            f"idx {rp.get('person_index','?')}={rp.get('spatial_position','unknown')}"
+            for rp in r2_persons if isinstance(rp, dict)
+        ) or "(none)"
 
         for r2_p in r2_persons:
             if not isinstance(r2_p, dict):
@@ -858,11 +885,23 @@ def main() -> int:
                 log.warning(f"[warn] {e.shot_id}: R2 person 无有效 person_index")
                 continue
             spatial = r2_p.get("spatial_position", "unknown")
+            other_indices = [
+                rp.get("person_index") for rp in r2_persons
+                if isinstance(rp, dict)
+                and isinstance(rp.get("person_index"), int)
+                and rp.get("person_index") != pidx
+            ]
             r1_person_text = (
-                f"This video shot contains {n_persons} person(s). Focus "
-                f"ONLY on person_index={pidx} at spatial_position={spatial}. "
-                f"Output the body_analysis dict for THIS ONE PERSON (do NOT "
-                f"output a wrapping persons[] array or other people's data). "
+                f"=== SHOT CONTEXT (pre-decided by Round 3) ===\n"
+                f"Shot-level interaction: count='{shot_count_anchor}', "
+                f"contact='{shot_contact_anchor}', "
+                f"relation='{shot_relation_anchor}'\n"
+                f"All persons in this shot: {persons_roster}\n\n"
+                f"=== YOUR TASK ===\n"
+                f"Focus ONLY on person_index={pidx} at "
+                f"spatial_position={spatial}. Output the body_analysis "
+                f"dict for THIS ONE PERSON (do NOT output a wrapping "
+                f"persons[] array or other people's data). "
                 f"Follow delivery_v1 body_analysis spec:\n"
                 "  - body_clearly_visible: bool\n"
                 "  - shot_frame_of_body: close_face|bust|half_body|"
@@ -884,8 +923,26 @@ def main() -> int:
                 "  - gesture_detail: specific string (left/right hand, "
                 "direction), not 'none'/'n/a'\n"
                 "  - hands_visible: bool\n"
-                "  - interaction: OBJECT {count, contact, relation, "
-                "interacts_with_person_index: list[int]}\n"
+                f"\n=== interaction FIELD — STRICT ENUM (CRITICAL) ===\n"
+                f"Your body_analysis.interaction MUST be an OBJECT with "
+                f"these 4 keys, using ONLY these enum values:\n"
+                f"  - count: 'solo'|'dyadic'|'triadic'|'crowd' "
+                f"(STRING enum, NOT integer 0/1/2). "
+                f"Copy shot-level count '{shot_count_anchor}' EXACTLY.\n"
+                f"  - contact: 'none'|'incidental'|'sustained' "
+                f"(STRING enum, NOT bool false/true, NOT 'self-contact', "
+                f"NOT free-form). Use shot-level '{shot_contact_anchor}' "
+                f"unless this person is demonstrably isolated "
+                f"(then 'none').\n"
+                f"  - relation: 'parallel'|'coordinated'|'opposing'|"
+                f"'hierarchical' (STRING enum, NOT 'independent', NOT "
+                f"'self-directed', NOT free-form). Use shot-level "
+                f"'{shot_relation_anchor}' unless this person is "
+                f"genuinely parallel within the shot.\n"
+                f"  - interacts_with_person_index: list[int] of OTHER "
+                f"persons this one interacts with. Valid indices from "
+                f"R2: {other_indices if other_indices else '[] (no peers)'}. "
+                f"Use empty list [] if this person is solitary.\n\n"
                 "  - motion_confidence: number [0,1]\n\n"
                 "Output ONLY the body_analysis dict, no wrapping. COMPACT "
                 "JSON. motion_caption <80 words, each alt_caption <40 words."
@@ -979,6 +1036,17 @@ def main() -> int:
                     ]
         except Exception as ex:
             log.warning(f"[warn clamp body-parts] {e.shot_id}: {ex}（继续）")
+
+        # 2.6) delivery_v1 严格合规后处理：
+        #   - body_analysis.interaction 的 count/contact/relation enum 兜底
+        #     (VLM per-person 视角常把 count 当 int、relation 当 free-form)
+        #   - face_analysis.face_clearly_visible 缺字段时注入
+        #     (vLLM 0.19 structured_outputs 对深层 nested required 支持弱)
+        #   - facial_attributes.{glasses,mask,makeup_visible} str→bool
+        try:
+            post_fix_compliance(obj, log=log)
+        except Exception as ex:
+            log.warning(f"[warn post-fix] {e.shot_id}: {ex}（继续用原 obj）")
 
         # 3) 注入 meta —— 规范要求 vlm_model/vlm_version/frames_used/infer_time_ms；
         #    其余是推理复现参数，Meta 类 extra="allow" 容许，便于下游消融分析。
