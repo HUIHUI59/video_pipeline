@@ -76,8 +76,12 @@ sampling:
   #                     + 插时间戳 token，时序推理最强，长短 shot 统一
   #             false → 老路径：自己用 decord 采固定帧数后发 image_url 列表
   video_mode: true
-  # vLLM 内部采样 fps；Qwen3-VL 默认 sample_fps=2，拉到 5 提高时间分辨率
-  video_fps: 5
+  # vLLM 内部采样 fps；Qwen3-VL 默认 sample_fps=2。
+  # 5 FPS 下长镜头（>5s）的 video embed 会吃掉 5K+ tok，挤压 R1 body output 空间
+  # → dominant 多人 shot 的 body_analysis 被截断（~11K chars 上限）。
+  # 3 FPS 平衡时间分辨率和 token 预算：5s shot 15 帧 ≈ 2250 tok video，
+  # R1 output 最多能到 ~11K tok ≈ 14K chars，够 3-4 人 dominant shot。
+  video_fps: 3
   # 单帧像素预算（控制每帧 token 数）。Qwen3-VL 用 28×28 patch + 4-neighbor merge：
   #   256×256 ≈ 65 tok；336×336 ≈ 150 tok；448×448 ≈ 265 tok
   video_max_pixels: 112896          # 336×336 上限
