@@ -244,10 +244,11 @@ def main() -> int:
         file_ops.append((filt_path, f"{pod_workspace}/manifest.jsonl"))
 
     project_root = Path(__file__).resolve().parents[2]
-    for fn in ("__init__.py", "schemas.py", "pod_runner.py"):
-        src = project_root / "src" / "runpod" / fn
-        if src.exists():
-            file_ops.append((str(src), f"{pod_workspace}/src/runpod/{fn}"))
+    # 推 src/runpod/ 下所有 .py —— glob 方式能自动捕获新增模块（face_crops.py 等），
+    # 不用每次加新 .py 都改 upload.py 的硬编码列表。
+    runpod_src_dir = project_root / "src" / "runpod"
+    for src in sorted(runpod_src_dir.glob("*.py")):
+        file_ops.append((str(src), f"{pod_workspace}/src/runpod/{src.name}"))
 
     # 推 tools/ 下所有 .sh（pod_setup.sh、kill_gpu.sh 等）
     tools_dir = project_root / "tools"
