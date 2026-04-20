@@ -766,8 +766,13 @@ def main() -> int:
                 face_crop_order = []
 
         r2_user_text = (
-            "Identify ALL visible persons in this video shot and output "
-            "their face_analysis. For each person, provide:\n"
+            "Identify the MOST PROMINENT persons in this video shot "
+            "(UP TO 6 persons max — prioritize foreground / largest "
+            "faces / main characters). Do NOT enumerate every background "
+            "extra; if the shot has >6 people, pick the 6 with the "
+            "largest face area and ignore the rest (the shot-level "
+            "interaction.count captures crowd separately). For each "
+            "selected person, provide:\n"
             "  - person_index: 0-based integer (0 = largest face or "
             "leftmost)\n"
             "  - spatial_position: one of 'center', 'left', 'right', "
