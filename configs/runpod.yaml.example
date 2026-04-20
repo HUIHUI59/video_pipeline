@@ -57,16 +57,17 @@ sampling:
   top_p:                 0.9
   repetition_penalty:    1.05
   # ── 三轮推理的 output 预算（R1 body / R2 face / R3 scene+interaction）──
-  # 必须满足 input + output ≤ max_model_len (16384)：
-  #   R1：video ~4K + system 800 + hint 1500 + out 6144 ≈ 12.5K ✓
+  # 必须满足 input + output ≤ max_model_len (16384)，超出部分 vLLM 自动 cap：
+  #   R1：video ~4K + system 800 + hint 1500 + out 10240 → 16K（用满，vLLM cap）
   #   R2：video ~4K + system 800 + crops 1.6K + hint 2.5K + out 4096 ≈ 13K ✓
   #   R3：video ~4K + system 800 + hint 400 + out 3072 ≈ 8.3K ✓
-  # 实测 3 人 shot body ~5-6K、face ~3-4K、scene ≤2K，都能放下
-  max_tokens_round1:     6144
+  # 实测 dominant 3-4 人 shot body 要 ~9K token，R1=6144 会截断导致 JSON parse
+  # 失败；R1=10240 覆盖 95%+ 场景。单人/双人 shot 用不完。
+  max_tokens_round1:     10240
   max_tokens_round2:     4096
   max_tokens_round3:     3072
   # 兼容旧单轮路径（暂时保留）
-  max_tokens:            6144
+  max_tokens:            8192
 
   # ══════════════════════════════════════════════════════════════
   # 采帧 & 视频输入（核心质量参数）
