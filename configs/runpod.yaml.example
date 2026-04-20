@@ -56,14 +56,15 @@ sampling:
   temperature:           0.2
   top_p:                 0.9
   repetition_penalty:    1.05
-  # ── 三轮推理的 output 预算（R1 body / R2 face / R3 scene+interaction）──
-  # 必须满足 input + output ≤ max_model_len (16384)，超出部分 vLLM 自动 cap：
-  #   R1：video ~4K + system 800 + hint 1500 + out 10240 → 16K（用满，vLLM cap）
-  #   R2：video ~4K + system 800 + crops 1.6K + hint 2.5K + out 4096 ≈ 13K ✓
-  #   R3：video ~4K + system 800 + hint 400 + out 3072 ≈ 8.3K ✓
-  # 实测 dominant 3-4 人 shot body 要 ~9K token，R1=6144 会截断导致 JSON parse
-  # 失败；R1=10240 覆盖 95%+ 场景。单人/双人 shot 用不完。
-  max_tokens_round1:     10240
+  # ── 三轮推理的 output 预算（R3 scene / R2 persons+face / R1 per-person body）──
+  # 2026-04-20 重构：R3→R2→R1-per-person 顺序 + R1 拆成 N 次 per-person 调用
+  # 必须满足 input + output ≤ max_model_len (16384)：
+  #   R3：video ~6K + system 800 + hint 500 + out 3072 ≈ 10.4K ✓
+  #   R2：video ~6K + system 800 + crops 1.6K + hint 2.5K + out 4096 ≈ 15K ✓
+  #   R1_per_person：video ~6K + system 800 + hint 1200 + out 4096 ≈ 12.1K ✓
+  # R1 per-person 每次只出 1 人 body (~3K tok) → 不会被 N 人膨胀撑爆。
+  # N=3 shot 跑 3 次 R1，vLLM prefix caching 让 video embed 只算一次。
+  max_tokens_round1:     4096
   max_tokens_round2:     4096
   max_tokens_round3:     3072
   # 兼容旧单轮路径（暂时保留）
@@ -77,11 +78,12 @@ sampling:
   #             false → 老路径：自己用 decord 采固定帧数后发 image_url 列表
   video_mode: true
   # vLLM 内部采样 fps；Qwen3-VL 默认 sample_fps=2。
-  # 5 FPS 下长镜头（>5s）的 video embed 会吃掉 5K+ tok，挤压 R1 body output 空间
-  # → dominant 多人 shot 的 body_analysis 被截断（~11K chars 上限）。
-  # 3 FPS 平衡时间分辨率和 token 预算：5s shot 15 帧 ≈ 2250 tok video，
-  # R1 output 最多能到 ~11K tok ≈ 14K chars，够 3-4 人 dominant shot。
-  video_fps: 3
+  # 2026-04-20 重构：R3→R2→R1-per-person 架构下，R1 每次只出 1 人 body
+  # (~3K tok output 够用)，不再被 N 人膨胀撑爆 max_model_len。因此可以把
+  # video_fps 提到 8，换取更高时间分辨率（5s shot = 40 帧 ≈ 6K tok video
+  # embed，单轮 input 约 9K，R1_per_person output 3K → 总 ~12K < 16K）。
+  # 动作/表情细粒度显著提升。
+  video_fps: 8
   # 单帧像素预算（控制每帧 token 数）。Qwen3-VL 用 28×28 patch + 4-neighbor merge：
   #   256×256 ≈ 65 tok；336×336 ≈ 150 tok；448×448 ≈ 265 tok
   video_max_pixels: 112896          # 336×336 上限

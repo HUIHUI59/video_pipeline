@@ -318,8 +318,11 @@ class Round1BodyLabel(_Base):
 
 
 class Round2Person(_Base):
-    person_index:  int = Field(ge=0)
-    face_analysis: Optional[FaceAnalysis] = None
+    # 2026-04-20 重构：Round 2 改为"人发现 + face_analysis"一体化，同时输出
+    # spatial_position（之前在 Round 1）；Round 1 现在只负责 per-person body。
+    person_index:     int = Field(ge=0)
+    spatial_position: SpatialPosition
+    face_analysis:    Optional[FaceAnalysis] = None
 
 
 class Round2Label(_Base):

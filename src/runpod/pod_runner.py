@@ -29,7 +29,8 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from src.runpod.schemas import (  # noqa
     ManifestEntry, ShotLabel,
-    Round1BodyLabel, Round2Label, Round3ShotLabel,
+    Round2Label, Round3ShotLabel,
+    BodyAnalysis,
 )
 from src.runpod.face_crops import detect_and_crop_faces  # noqa
 
@@ -532,10 +533,13 @@ def main() -> int:
             log.warning(f"[dry-run-model-load] 无法读取 cuda 显存：{ex}")
         return 0
 
-    # 三轮推理的 schema：R1 body / R2 face / R3 scene+interaction
-    schema_r1 = Round1BodyLabel.model_json_schema()
-    schema_r2 = Round2Label.model_json_schema()
-    schema_r3 = Round3ShotLabel.model_json_schema()
+    # 三轮推理的 schema（2026-04-20 per-person 重构版）：
+    #   R3：scene/interaction/quality/usability （shot 级元数据）
+    #   R2：persons = [{person_index, spatial_position, face_analysis}]（人发现+脸）
+    #   R1：每人独立一次调用，输出单个 BodyAnalysis dict（per-person body）
+    schema_r1_person = BodyAnalysis.model_json_schema()
+    schema_r2        = Round2Label.model_json_schema()
+    schema_r3        = Round3ShotLabel.model_json_schema()
 
     def _build_sampling(schema: dict, max_tokens: int, round_label: str) -> SamplingParams:
         """结构化输出 API 按新→旧依次尝试；全失败降级无约束。
@@ -599,8 +603,11 @@ def main() -> int:
     max_tokens_r1 = int(samp.get("max_tokens_round1", 8192))
     max_tokens_r2 = int(samp.get("max_tokens_round2", 6144))
     max_tokens_r3 = int(samp.get("max_tokens_round3", 4096))
-    sampling_r1 = _build_sampling(schema_r1, max_tokens_r1, "Round1-body")
-    sampling_r2 = _build_sampling(schema_r2, max_tokens_r2, "Round2-face")
+    # per-person 每人 body_analysis 约 3K tok，所以 max_tokens_r1 用户设 10240 也
+    # 够余量。R2 现在同时做人发现 + face_analysis，schema 和 prompt 略胖。
+    sampling_r1_person = _build_sampling(
+        schema_r1_person, max_tokens_r1, "Round1-body-per-person")
+    sampling_r2 = _build_sampling(schema_r2, max_tokens_r2, "Round2-persons+face")
     sampling_r3 = _build_sampling(schema_r3, max_tokens_r3, "Round3-scene")
     resize_shortest = int(samp.get("resize_shortest", 448))
 
@@ -661,307 +668,34 @@ def main() -> int:
                            for im in frames]
             content_base = image_parts
 
-        # ── Round 1：body + scene + interaction + quality + usability ──
-        # system_prompt 保持 delivery_v1 原版；user_text 末尾追加硬指令：本轮只出 body
-        # 结构化约束在 MoE 量化 kernel 上不能 enforce，所以这里用硬指令 + 结构
-        # 示例强 nudge VLM 输出规范 JSON 嵌套。
-        r1_hint = (
-            "\n\nCRITICAL ROUND 1 INSTRUCTION: This is Round 1 of 3. In this "
-            "round, output ONLY persons[] array with body_analysis + "
-            "person_index + spatial_position for each person. DO NOT output "
-            "face_analysis, shot_context, interaction, quality_flags, "
-            "usability_score, or meta — those are handled in later rounds.\n\n"
-            "STRICT STRUCTURAL REQUIREMENTS for body_analysis (do NOT flatten, "
-            "do NOT stringify objects):\n"
-            '  - alternative_captions MUST be an OBJECT with exactly 4 keys '
-            '{"direct": "...", "literary": "...", "direction": "...", '
-            '"situational": "..."}, NOT a list/array.\n'
-            '  - kinematics_hint MUST be an OBJECT: {"trajectory": "...", '
-            '"periodicity": "periodic|non_periodic", "symmetry": '
-            '"bilateral_symmetric|bilateral_asymmetric|axial", '
-            '"duration_class": "..."}, NOT a single word like "static".\n'
-            '  - action_quality MUST be an OBJECT: {"intensity": "low|mid|high", '
-            '"tone": "...", "tempo": "..."}, NOT a string.\n'
-            '  - upper_body_detail MUST be an OBJECT with 7 string fields '
-            '(head, neck, shoulders, arms, hands, torso, posture).\n'
-            '  - gesture_detail MUST be a specific string, not "none" or '
-            '"not applicable".\n\n'
-            "TOKEN BUDGET IS STRICT. Output COMPACT JSON on minimal lines: "
-            "NO pretty-printing, NO 4-space indentation, NO unnecessary "
-            "whitespace. Keep motion_caption under 80 words, each "
-            "alternative_caption under 40 words. If in doubt, write less."
-        )
-        messages_r1 = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user",   "content": [
-                *content_base,
-                {"type": "text", "text": user_text + r1_hint},
-            ]},
-        ]
+        # ═══════════════════════════════════════════════════════════════
+        # 2026-04-20 重构：R3 → R2 → R1-per-person
+        #   R3：shot 级元数据（最快 + 不依赖人发现）
+        #   R2：人发现 + face_analysis（带 face crops）
+        #   R1：对每个 person 独立一次 body_analysis 推理（per-person，
+        #       避免单轮输出随 N 膨胀被 max_model_len 截断）
+        # ═══════════════════════════════════════════════════════════════
 
-        # 失败保存：调模块顶层 _save_failed(out_root, ...)
         slug = e.shot_id.replace("/", "__")
 
-        try:
-            # 第一个 shot 会包含 flashinfer JIT 编译（Qwen3.5 只）
-            if ok == 0 and bad == 0:
-                log.info(
-                    f"[info] {e.shot_id} 开始 Round 1 推理；若是 Qwen3.5 首次跑，"
-                    f"此处会触发 flashinfer JIT 编译 gdn_prefill_sm90 kernel，"
-                    f"通常 2-4 min（看 stdout 的 ninja/nvcc 输出；心跳每 30s 打一行）"
-                )
-            else:
-                log.info(f"[info] {e.shot_id} 开始 Round 1 推理")
-            t1 = time.time()
-            _hb_set(f"{e.shot_id} Round 1 推理",
-                    detail=f"n_frames={n_frames} category={e.shot_category}")
-            res_r1 = llm.chat(messages_r1, sampling_r1, use_tqdm=False)
-            _hb_set(None)
-            raw_r1 = res_r1[0].outputs[0].text
-            infer_ms_r1 = int((time.time() - t1) * 1000)
-            log.info(f"[info] {e.shot_id} Round 1 完成 ({infer_ms_r1}ms, "
-                     f"{len(raw_r1)} chars)")
-        except Exception as ex:
-            _hb_set(None)
-            log.error(f"[ERR] Round1 推理失败 {e.shot_id}: {ex}")
-            bad += 1
-            continue
-
-        # 1a) Round 1 JSON 解析
-        try:
-            obj = json.loads(raw_r1)
-        except Exception as ex:
-            log.error(f"[ERR parse-r1] {e.shot_id}: {ex}")
-            _save_failed(out_root, slug, raw_r1, f"json_parse_round1: {ex}")
-            bad += 1
-            continue
-
-        # ── Round 2：face_analysis only，对 Round 1 识别到的每个 person ──
-        persons_r1 = obj.get("persons", []) or []
-        n_persons = len(persons_r1)
-        if n_persons == 0:
-            log.info(f"[skip-face] {e.shot_id} Round1 未识别到 person，跳过 Round2")
-            infer_ms_r2 = 0
-        else:
-            # 构造 Round 2 prompt：告诉模型 person 数量和 index，只出 face
-            pos_list = ", ".join(
-                f"index {p.get('person_index', i)}="
-                f"{p.get('spatial_position', 'unknown')}"
-                for i, p in enumerate(persons_r1)
-            )
-            face_user_text = (
-                f"You previously identified {n_persons} person(s) in this "
-                f"video shot, at positions: {pos_list}.\n\n"
-                "Now provide detailed face_analysis for EACH person, indexed "
-                "by person_index exactly matching the previous round. "
-                "Output ONLY the JSON "
-                '{"persons": [{"person_index": i, "face_analysis": {...}}, ...]}.'
-                "\n\n"
-                "STRICT face_analysis SCHEMA (follow this shape EXACTLY for "
-                "each person; do NOT flatten, do NOT stringify objects):\n"
-                "```\n"
-                "{\n"
-                '  "face_clearly_visible": true,          // REQUIRED bool, '
-                'set false when face occluded/<3% of frame (then other fields null)\n'
-                '  "face_size_ratio": 0.08,                // number [0,1]\n'
-                '  "primary_emotion": "neutral",           // enum: anger, sadness, '
-                'joy, fear, surprise, disgust, contempt, neutral, complex\n'
-                '  "secondary_emotion": null,              // optional enum or null\n'
-                '  "valence": 0.2,                         // NUMBER in [-1,1], '
-                'NOT a word like "positive"\n'
-                '  "arousal": 0.3,                         // NUMBER in [0,1], '
-                'NOT a word like "low"\n'
-                '  "intensity": 0.4,                       // NUMBER in [0,1], '
-                'NOT a word like "medium"\n'
-                '  "expression_caption": "Full descriptive paragraph of the '
-                'facial expression.",\n'
-                '  "alternative_captions": {               // OBJECT with EXACTLY '
-                '4 string keys. NOT a list/array.\n'
-                '    "direct": "...", "literary": "...", "direction": "...", '
-                '"situational": "..."\n'
-                '  },\n'
-                '  "facial_components": {                  // OBJECT with 6 string keys\n'
-                '    "eyes": "...", "eyebrows": "...", "mouth": "...",\n'
-                '    "jaw": "...", "gaze_direction": "camera|left|right|up|'
-                'down|averted|closed",\n'
-                '    "head_pose": "frontal|3q_left|3q_right|profile_left|'
-                'profile_right|tilted_up|tilted_down"\n'
-                '  },\n'
-                '  "facial_attributes": {                  // OBJECT with 8 keys; '
-                '"facial_hair" etc MUST be STRINGS (e.g. "none"), not booleans\n'
-                '    "apparent_gender": "male|female|ambiguous",\n'
-                '    "apparent_age_range": "child|teen|young_adult|adult|'
-                'middle_aged|elderly",\n'
-                '    "glasses": false, "facial_hair": "none", "head_covering": '
-                '"none", "mask": false, "makeup_visible": false, '
-                '"distinctive_notes": ""\n'
-                '  },\n'
-                '  "temporal_change": "static",            // enum: static, '
-                'building, peak_then_release, transition, rapid_micro\n'
-                '  "micro_expression": false,\n'
-                '  "observable_blendshape_hints": {        // OBJECT with 15 '
-                'enum keys. NOT a flat string.\n'
-                '    "brow_raise_inner": "none", "brow_raise_outer": "none",\n'
-                '    "brow_furrow": "none", "eye_widen": "none", '
-                '"eye_squint": "none",\n'
-                '    "eye_blink_state": "open",            // enum: open, half, '
-                'closed, rapid_blink, unknown\n'
-                '    "cheek_raise": "none", "nose_wrinkle": "none",\n'
-                '    "upper_lip_raise": "none", "lip_corner_pull": "none",\n'
-                '    "lip_corner_depress": "none", "lip_tighten": "none",\n'
-                '    "lip_part": "none", "jaw_clench": "none", "jaw_drop": "none"\n'
-                '    // All 14 non-blink_state fields use enum: none|slight|'
-                'medium|strong|unknown\n'
-                '  },\n'
-                '  "expression_confidence": 0.8            // number [0,1]\n'
-                '}\n'
-                "```\n\n"
-                "GATE RULE: if face is not clearly visible (occluded, <3% of "
-                "frame, back view), set face_clearly_visible=false and you MAY "
-                "set the other fields to null, BUT the object structure above "
-                "must still be present (with nulls where appropriate).\n\n"
-                "TOKEN BUDGET IS STRICT. Output COMPACT JSON on minimal "
-                "lines: NO pretty-printing, NO 4-space indentation, NO "
-                "unnecessary whitespace. Keep every string description "
-                "CONCISE — expression_caption under 60 words, each "
-                "alternative_caption under 40 words. If in doubt, write less."
-            )
-            # ── Face crop 附加（可选）──
-            # 在采样帧上用 Haar/YOLO 检测脸，裁 224px crop 一起送给 Round 2。
-            # 不影响 content_base 里的 video（完整上下文仍在），VLM 可同时
-            # 看到 shot 全貌 + 高分辨率脸部细节。token 成本增加 ~200×N，
-            # 换来 facial_components / observable_blendshape_hints 准确度提升。
-            face_crop_parts: list[dict] = []
-            face_crop_order: list[str] = []
-            if bool(samp.get("face_crop_enabled", False)):
-                try:
-                    fc_fps    = int(samp.get("face_crop_sample_fps", 2))
-                    fc_size   = int(samp.get("face_crop_size", 224))
-                    fc_max    = int(samp.get("face_crop_per_frame_max", 4))
-                    fc_back   = str(samp.get("face_detector", "haar"))
-                    fc_yolo_w = samp.get("yolo_face_weights")
-                    crops = detect_and_crop_faces(
-                        str(video), fps=fc_fps, crop_size=fc_size,
-                        max_per_frame=fc_max, backend=fc_back,
-                        yolo_weights=fc_yolo_w)
-                    for ts_sec, slot, crop_img in crops:
-                        face_crop_parts.append({
-                            "type": "image_url",
-                            "image_url": {"url": _pil_to_data_url(crop_img)},
-                        })
-                        face_crop_order.append(f"t={ts_sec:.1f}s-slot{slot}")
-                    log.info(f"[info] {e.shot_id} 附加 {len(face_crop_parts)} "
-                             f"张 face crop (fps={fc_fps}, size={fc_size})")
-                except Exception as ex:
-                    log.warning(f"[warn] face_crops 生成失败 {e.shot_id}: {ex}")
-                    face_crop_parts = []
-                    face_crop_order = []
-
-            # 在 user_text 末尾追加一段说明（如果有 crop）
-            if face_crop_parts:
-                face_user_text_with_crops = face_user_text + (
-                    "\n\n=== FACE CROPS BELOW ===\n"
-                    f"The next {len(face_crop_parts)} images are face close-ups "
-                    f"({fc_size}×{fc_size} each) auto-detected from the same "
-                    "video. They are ordered by (timestamp, slot) where slot=0 "
-                    "is the largest face in that frame. Use these for detailed "
-                    "facial_components and observable_blendshape_hints "
-                    "analysis. Crop order: " + ", ".join(face_crop_order)
-                )
-            else:
-                face_user_text_with_crops = face_user_text
-
-            messages_r2 = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user",   "content": [
-                    *content_base,
-                    *face_crop_parts,
-                    {"type": "text", "text": face_user_text_with_crops},
-                ]},
-            ]
-            try:
-                log.info(f"[info] {e.shot_id} 开始 Round 2 推理 "
-                         f"({n_persons} 个 person 的 face_analysis)")
-                t2 = time.time()
-                _hb_set(f"{e.shot_id} Round 2 推理",
-                        detail=f"{n_persons} persons")
-                res_r2 = llm.chat(messages_r2, sampling_r2, use_tqdm=False)
-                _hb_set(None)
-                raw_r2 = res_r2[0].outputs[0].text
-                infer_ms_r2 = int((time.time() - t2) * 1000)
-                log.info(f"[info] {e.shot_id} Round 2 完成 ({infer_ms_r2}ms, "
-                         f"{len(raw_r2)} chars)")
-            except Exception as ex:
-                _hb_set(None)
-                log.warning(f"[warn] Round2 face 推理失败 {e.shot_id}: {ex}"
-                            f"（保留 Round1 结果，face_analysis=null）")
-                raw_r2 = ""
-                infer_ms_r2 = 0
-
-            # 1b) Round 2 JSON 解析 + 合并（按 person_index 对齐）
-            if raw_r2:
-                try:
-                    face_obj = json.loads(raw_r2)
-                    face_by_idx = {
-                        fp.get("person_index"): fp.get("face_analysis")
-                        for fp in face_obj.get("persons", [])
-                        if isinstance(fp, dict)
-                    }
-                    r1_indices = {
-                        p.get("person_index", i)
-                        for i, p in enumerate(persons_r1)
-                    }
-                    extra = set(face_by_idx) - r1_indices
-                    missing = r1_indices - set(face_by_idx)
-                    if extra:
-                        log.warning(
-                            f"[warn] Round2 返回了 Round1 没有的 "
-                            f"person_index={sorted(extra)}，已忽略 | {e.shot_id}"
-                        )
-                    if missing:
-                        log.info(
-                            f"[info] Round2 缺失 person_index="
-                            f"{sorted(missing)} 的 face，face_analysis=null | "
-                            f"{e.shot_id}"
-                        )
-                    # 显式写入 face_analysis（None 也写），符合规范：
-                    # face_clearly_visible=False 时 face_analysis 应为 null，
-                    # 而不是 dict 里缺 key。Pydantic 校验要求字段存在。
-                    for i, p in enumerate(persons_r1):
-                        idx = p.get("person_index", i)
-                        p["face_analysis"] = face_by_idx.get(idx)  # 可能 None
-                except Exception as ex:
-                    log.warning(f"[warn] Round2 parse 失败 {e.shot_id}: {ex}"
-                                f"（face_analysis 留空）")
-                    _save_failed(out_root, slug + ".round2", raw_r2,
-                                 f"json_parse_round2: {ex}")
-                    # parse 失败：所有人 face_analysis=null，保持结构合规
-                    for i, p in enumerate(persons_r1):
-                        p.setdefault("face_analysis", None)
-            else:
-                # 没跑 Round2（Round1 无 person 或推理失败）：显式 null face
-                for i, p in enumerate(persons_r1):
-                    p.setdefault("face_analysis", None)
-
-        # ── Round 3：shot_context + interaction + quality_flags + usability_score ──
-        # Round 1 的 schema 已经缩到 "只出 persons[].body_analysis"，所以场景级
-        # 字段必须靠 R3 生成。同一段视频用 prefix caching，embed 不重复计算。
+        # ── Round 3：scene + interaction + quality + usability ──
         r3_user_text = (
-            f"You have already analyzed this {e.duration_sec:.1f}s video shot. "
-            f"{len(persons_r1)} person(s) were identified. Now output ONLY the "
+            f"Analyze this {e.duration_sec:.1f}s video shot. Output ONLY "
             f"shot-level metadata (no persons[] array):\n"
             "  - shot_context: {shot_type, shot_emotion_summary, "
             "shot_motion_summary, scene_context: {visible_setting, "
             "narrative_situation, narrative_confidence}}\n"
-            "  - interaction: {count, contact, relation}\n"
+            "  - interaction: {count (solo/dyadic/triadic/crowd), "
+            "contact (none/incidental/sustained), relation}\n"
             "  - quality_flags: all 8 fields (face_clearly_visible, "
             "body_clearly_visible, motion_blur, occlusion, lighting, "
             "camera_stable, frame_sampling_ok, vlm_confidence)\n"
             "  - usability_score: {face, motion}, both numbers in [0,1]\n\n"
-            "STRICT: do NOT output persons[] or any face_analysis / body_analysis. "
-            "Output COMPACT JSON, minimal whitespace. shot_emotion_summary and "
-            "shot_motion_summary each 1-2 sentences; scene_context.visible_setting "
-            "1 sentence; narrative_situation null if narrative_confidence<0.3."
+            "STRICT: do NOT output persons[] or any face_analysis / "
+            "body_analysis — those come from Round 2/1. Output COMPACT JSON, "
+            "minimal whitespace. shot_emotion_summary and shot_motion_summary "
+            "each 1-2 sentences; narrative_situation null if "
+            "narrative_confidence<0.3."
         )
         messages_r3 = [
             {"role": "system", "content": system_prompt},
@@ -970,10 +704,15 @@ def main() -> int:
                 {"type": "text", "text": r3_user_text},
             ]},
         ]
-        raw_r3 = ""
-        infer_ms_r3 = 0
         try:
-            log.info(f"[info] {e.shot_id} 开始 Round 3 scene/interaction 推理")
+            if ok == 0 and bad == 0:
+                log.info(
+                    f"[info] {e.shot_id} 开始 Round 3 scene/interaction 推理；"
+                    f"首个 shot 会触发 CUDA graph 捕获 + kernel JIT，"
+                    f"2-4 min；心跳每 30s 打一行"
+                )
+            else:
+                log.info(f"[info] {e.shot_id} 开始 Round 3 scene/interaction 推理")
             t3 = time.time()
             _hb_set(f"{e.shot_id} Round 3 推理", detail="scene+interaction+quality")
             res_r3 = llm.chat(messages_r3, sampling_r3, use_tqdm=False)
@@ -985,11 +724,10 @@ def main() -> int:
         except Exception as ex:
             _hb_set(None)
             log.error(f"[ERR] Round3 推理失败 {e.shot_id}: {ex}")
-            _save_failed(out_root, slug, raw_r3 or "", f"round3_inference_crash: {ex}")
+            _save_failed(out_root, slug, "", f"round3_inference_crash: {ex}")
             bad += 1
             continue
 
-        # 3a) Round 3 JSON 解析 + 合并到 obj 顶层
         try:
             r3_obj = json.loads(raw_r3)
         except Exception as ex:
@@ -997,14 +735,223 @@ def main() -> int:
             _save_failed(out_root, slug, raw_r3, f"json_parse_round3: {ex}")
             bad += 1
             continue
-        obj["shot_id"]         = e.shot_id
-        obj["source_movie"]    = e.source_movie
-        obj["shot_context"]    = r3_obj.get("shot_context")
-        obj["interaction"]     = r3_obj.get("interaction")
-        obj["quality_flags"]   = r3_obj.get("quality_flags")
-        obj["usability_score"] = r3_obj.get("usability_score")
+
+        # ── Round 2：人发现 + face_analysis（附 face crops）──
+        # 附加 face crops（可选，帮 VLM 看清面部细节）
+        face_crop_parts: list[dict] = []
+        face_crop_order: list[str] = []
+        if bool(samp.get("face_crop_enabled", False)):
+            try:
+                fc_fps    = int(samp.get("face_crop_sample_fps", 2))
+                fc_size   = int(samp.get("face_crop_size", 224))
+                fc_max    = int(samp.get("face_crop_per_frame_max", 4))
+                fc_back   = str(samp.get("face_detector", "haar"))
+                fc_yolo_w = samp.get("yolo_face_weights")
+                crops = detect_and_crop_faces(
+                    str(video), fps=fc_fps, crop_size=fc_size,
+                    max_per_frame=fc_max, backend=fc_back,
+                    yolo_weights=fc_yolo_w)
+                for ts_sec, slot, crop_img in crops:
+                    face_crop_parts.append({
+                        "type": "image_url",
+                        "image_url": {"url": _pil_to_data_url(crop_img)},
+                    })
+                    face_crop_order.append(f"t={ts_sec:.1f}s-slot{slot}")
+                log.info(f"[info] {e.shot_id} 附加 {len(face_crop_parts)} "
+                         f"张 face crop (fps={fc_fps}, size={fc_size})")
+            except Exception as ex:
+                log.warning(f"[warn] face_crops 生成失败 {e.shot_id}: {ex}")
+                face_crop_parts = []
+                face_crop_order = []
+
+        r2_user_text = (
+            "Identify ALL visible persons in this video shot and output "
+            "their face_analysis. For each person, provide:\n"
+            "  - person_index: 0-based integer (0 = largest face or "
+            "leftmost)\n"
+            "  - spatial_position: one of 'center', 'left', 'right', "
+            "'background'\n"
+            "  - face_analysis: full dict per delivery_v1 face spec\n\n"
+            'Output ONLY: {"persons": [{"person_index": i, '
+            '"spatial_position": "...", "face_analysis": {...}}, ...]}. '
+            "If a person's face is not clearly visible (occluded or <3% "
+            "of frame), set face_clearly_visible=false and null the "
+            "other face_analysis fields for that person.\n\n"
+            "STRICT face_analysis STRUCTURE (do NOT flatten):\n"
+            "  - 9-class primary_emotion: anger|sadness|joy|fear|surprise|"
+            "disgust|contempt|neutral|complex\n"
+            "  - valence/arousal/intensity: NUMBERS in [-1,1] / [0,1] / "
+            "[0,1]\n"
+            "  - alternative_captions: OBJECT {direct, literary, "
+            "direction, situational}, NOT an array\n"
+            "  - facial_components: OBJECT with 6 keys (eyes, eyebrows, "
+            "mouth, jaw, gaze_direction, head_pose)\n"
+            "  - facial_attributes: OBJECT with 8 keys (apparent_gender, "
+            "apparent_age_range, glasses, facial_hair, head_covering, "
+            "mask, makeup_visible, distinctive_notes)\n"
+            "  - observable_blendshape_hints: OBJECT with 15 enum keys, "
+            "NOT a flat string\n"
+            "  - temporal_change enum: static|building|peak_then_release|"
+            "transition|rapid_micro\n"
+            "  - expression_confidence: number [0,1]\n\n"
+            "COMPACT JSON, no pretty-print. expression_caption <60 words, "
+            "each alt_caption <40 words."
+        )
+        if face_crop_parts:
+            r2_user_text += (
+                "\n\n=== FACE CROPS BELOW ===\n"
+                f"The next {len(face_crop_parts)} images are face "
+                f"close-ups (224×224 each) auto-detected from the same "
+                "video, ordered by (timestamp, slot). Use them for "
+                "detailed facial_components and observable_blendshape_hints. "
+                "Crop order: " + ", ".join(face_crop_order)
+            )
+
+        messages_r2 = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user",   "content": [
+                *content_base,
+                *face_crop_parts,
+                {"type": "text", "text": r2_user_text},
+            ]},
+        ]
+        try:
+            log.info(f"[info] {e.shot_id} 开始 Round 2 推理（人发现 + face）")
+            t2 = time.time()
+            _hb_set(f"{e.shot_id} Round 2 推理")
+            res_r2 = llm.chat(messages_r2, sampling_r2, use_tqdm=False)
+            _hb_set(None)
+            raw_r2 = res_r2[0].outputs[0].text
+            infer_ms_r2 = int((time.time() - t2) * 1000)
+            log.info(f"[info] {e.shot_id} Round 2 完成 ({infer_ms_r2}ms, "
+                     f"{len(raw_r2)} chars)")
+        except Exception as ex:
+            _hb_set(None)
+            log.error(f"[ERR] Round2 推理失败 {e.shot_id}: {ex}")
+            _save_failed(out_root, slug, "", f"round2_inference_crash: {ex}")
+            bad += 1
+            continue
+
+        try:
+            r2_obj = json.loads(raw_r2)
+        except Exception as ex:
+            log.error(f"[ERR parse-r2] {e.shot_id}: {ex}")
+            _save_failed(out_root, slug, raw_r2, f"json_parse_round2: {ex}")
+            bad += 1
+            continue
+
+        r2_persons = r2_obj.get("persons", []) or []
+        n_persons = len(r2_persons)
+        log.info(f"[info] {e.shot_id} R2 发现 {n_persons} 个 person")
+
+        # ── Round 1 per-person：每个 person 独立一次 body_analysis 推理 ──
+        # 关键：per-person 调用 → 每次只出 1 人 body (~3K tok)，不会被
+        # max_model_len 截断。vLLM prefix caching 让 video embed 复用。
+        body_by_index: dict[int, dict | None] = {}
+        infer_ms_r1 = 0
+
+        for r2_p in r2_persons:
+            if not isinstance(r2_p, dict):
+                continue
+            pidx = r2_p.get("person_index")
+            if not isinstance(pidx, int):
+                log.warning(f"[warn] {e.shot_id}: R2 person 无有效 person_index")
+                continue
+            spatial = r2_p.get("spatial_position", "unknown")
+            r1_person_text = (
+                f"This video shot contains {n_persons} person(s). Focus "
+                f"ONLY on person_index={pidx} at spatial_position={spatial}. "
+                f"Output the body_analysis dict for THIS ONE PERSON (do NOT "
+                f"output a wrapping persons[] array or other people's data). "
+                f"Follow delivery_v1 body_analysis spec:\n"
+                "  - body_clearly_visible: bool\n"
+                "  - shot_frame_of_body: close_face|bust|half_body|"
+                "three_quarter|full_body|wide\n"
+                "  - visible_body_parts: list[str]\n"
+                "  - motion_caption: 50-180 words (BODY only, no face)\n"
+                "  - alternative_captions: OBJECT with 4 keys (direct, "
+                "literary, direction, situational), NOT a list\n"
+                "  - action_primary: taxonomy leaf (walking, sitting, etc.)\n"
+                "  - action_quality: OBJECT {intensity (low/mid/high), "
+                "tone, tempo}, NOT a string\n"
+                "  - body_focus: enum (upper_body, hands, etc.)\n"
+                "  - kinematics_hint: OBJECT {trajectory, periodicity "
+                "(periodic/non_periodic), symmetry "
+                "(bilateral_symmetric/bilateral_asymmetric/axial), "
+                "duration_class}, NOT a single word\n"
+                "  - upper_body_detail: OBJECT with 7 string fields "
+                "(head, neck, shoulders, arms, hands, torso, posture)\n"
+                "  - gesture_detail: specific string (left/right hand, "
+                "direction), not 'none'/'n/a'\n"
+                "  - hands_visible: bool\n"
+                "  - interaction: OBJECT {count, contact, relation, "
+                "interacts_with_person_index: list[int]}\n"
+                "  - motion_confidence: number [0,1]\n\n"
+                "Output ONLY the body_analysis dict, no wrapping. COMPACT "
+                "JSON. motion_caption <80 words, each alt_caption <40 words."
+            )
+            messages_r1 = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user",   "content": [
+                    *content_base,
+                    {"type": "text", "text": r1_person_text},
+                ]},
+            ]
+            try:
+                log.info(f"[info] {e.shot_id} 开始 R1 推理 person_index={pidx}")
+                t1 = time.time()
+                _hb_set(f"{e.shot_id} R1 person={pidx}",
+                        detail=f"spatial={spatial}")
+                res_r1 = llm.chat(messages_r1, sampling_r1_person,
+                                  use_tqdm=False)
+                _hb_set(None)
+                raw_r1 = res_r1[0].outputs[0].text
+                ms = int((time.time() - t1) * 1000)
+                infer_ms_r1 += ms
+                log.info(f"[info] {e.shot_id} R1 person={pidx} 完成 "
+                         f"({ms}ms, {len(raw_r1)} chars)")
+            except Exception as ex:
+                _hb_set(None)
+                log.warning(f"[warn] R1 person={pidx} 推理失败 {e.shot_id}: "
+                            f"{ex}（body_analysis=null）")
+                body_by_index[pidx] = None
+                continue
+
+            try:
+                body_by_index[pidx] = json.loads(raw_r1)
+            except Exception as ex:
+                log.warning(f"[warn] R1 person={pidx} parse 失败 "
+                            f"{e.shot_id}: {ex}")
+                _save_failed(out_root, f"{slug}.r1.p{pidx}", raw_r1,
+                             f"json_parse_round1_person_{pidx}: {ex}")
+                body_by_index[pidx] = None
+
+        # ── 合并 R3 + R2 + R1-per-person 到 obj ──
+        obj: dict[str, Any] = {
+            "shot_id":         e.shot_id,
+            "source_movie":    e.source_movie,
+            "shot_context":    r3_obj.get("shot_context"),
+            "interaction":     r3_obj.get("interaction"),
+            "quality_flags":   r3_obj.get("quality_flags"),
+            "usability_score": r3_obj.get("usability_score"),
+            "persons":         [],
+        }
         if "exclusion_reason" in r3_obj:
             obj["exclusion_reason"] = r3_obj["exclusion_reason"]
+
+        for r2_p in r2_persons:
+            if not isinstance(r2_p, dict):
+                continue
+            pidx = r2_p.get("person_index")
+            obj["persons"].append({
+                "person_index":     pidx,
+                "spatial_position": r2_p.get("spatial_position"),
+                "face_analysis":    r2_p.get("face_analysis"),
+                "body_analysis":    body_by_index.get(pidx),
+            })
+
+        if n_persons == 0:
+            log.info(f"[info] {e.shot_id} R2 未识别到 person，persons[]=空")
 
         infer_ms = infer_ms_r1 + infer_ms_r2 + infer_ms_r3
 
