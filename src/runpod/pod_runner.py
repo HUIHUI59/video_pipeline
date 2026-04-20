@@ -137,6 +137,13 @@ def _build_llm_kwargs(model_cfg: dict[str, Any]) -> dict[str, Any]:
             )
         kwargs["quantization"] = qt
 
+    # vLLM 默认拒绝 chat message 里的 file:// URL（防 SSRF）；video_mode=true
+    # 需要在 LLM 构造时显式白名单一个目录前缀。main() 会在 video_mode=true 时
+    # 自动把 str(workspace) 塞进 model_cfg；用户也可以手动指定。
+    allowed = model_cfg.get("allowed_local_media_path")
+    if allowed:
+        kwargs["allowed_local_media_path"] = str(allowed)
+
     tp = int(model_cfg.get("tensor_parallel_size", 1))
     if tp > 1:
         kwargs["tensor_parallel_size"] = tp
@@ -480,6 +487,15 @@ def main() -> int:
                 break
 
     model_load_src = model_path or model_name
+
+    # video_mode=true 需要 vLLM 白名单本地文件前缀，否则 file:// video_url 报
+    # "Cannot load local files without --allowed-local-media-path"。默认用
+    # workspace 目录（clips/ 在里面）。用户可在 yaml 显式设 model.allowed_local_media_path
+    # 覆盖（例如只允许 clips/ 子目录）。
+    if bool(samp.get("video_mode", False)) and not model_cfg.get("allowed_local_media_path"):
+        model_cfg["allowed_local_media_path"] = str(workspace)
+        log.info(f"video_mode=true → 自动注入 "
+                 f"allowed_local_media_path={workspace}")
 
     # 按 model_cfg 组装 vLLM LLM() kwargs（支持 bf16/fp8/awq/awq_marlin/gptq-int4）
     try:
