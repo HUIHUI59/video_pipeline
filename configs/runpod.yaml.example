@@ -34,8 +34,10 @@ model:
   # 3 轮推理每轮独立 context。H100 80GB + 32B BF16 (~64GB weights) + util=0.9 时
   # KV cache 只剩 ~4.3 GB，够 16384 token（实测 vLLM 自算上限 17616）；20480 会
   # ValueError: "KV cache memory (4.3 GiB) < needed (5.0 GiB)"。H200 141GB 可放宽。
-  max_model_len: 16384
-  gpu_memory_utilization: 0.92  # 0.9 → 0.92 多挤 ~0.8 GB 给 KV；bf16 建议 ≤0.94
+  max_model_len: 20480           # 16384 → 20480：长 shot (>10s) 4+ persons R2
+                                 # 需要 >6K output tokens，否则 vLLM cap output 空间
+  gpu_memory_utilization: 0.94   # 0.92 → 0.94 补 1.6GB 给 KV；max_model_len=20480
+                                 # 时 KV 约 5.4GB，要留给 activation/CUDA graph
   # 原生 video 模式下 vLLM 内部会把视频切成多图：image 给大，video=1 每次发 1 个视频
   limit_mm_per_prompt:
     image: 64
@@ -65,7 +67,7 @@ sampling:
   # R1 per-person 每次只出 1 人 body (~3K tok) → 不会被 N 人膨胀撑爆。
   # N=3 shot 跑 3 次 R1，vLLM prefix caching 让 video embed 只算一次。
   max_tokens_round1:     4096
-  max_tokens_round2:     6144
+  max_tokens_round2:     8192
   max_tokens_round3:     3072
   # 兼容旧单轮路径（暂时保留）
   max_tokens:            8192
