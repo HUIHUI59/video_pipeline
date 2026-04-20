@@ -101,6 +101,12 @@ sampling:
   face_crop_sample_fps: 2           # 裁脸帧率（不用 5，2 足够覆盖表情动态）
   face_detector: haar               # haar (cv2 内置) | yolo_face (需 yolov8n-face.pt)
 
+  # ── Crowd shot 抛弃 ──
+  # R2 让 VLM 输出 visible_person_count_total（含背景）；若 > 该阈值则
+  # 跳过 R1 per-person 推理，用 R3 shot 级元数据 + exclusion_reason 写盘。
+  # Stage 4 pre-filter 对 crowd 分类不够精准，此 gate 是 VLM-view 的最终裁判。
+  crowd_shot_max_persons: 4
+
   # ── 老路径参数（video_mode=false 时使用）──
   frames_single_dominant: 8
   frames_multi_wide:      4

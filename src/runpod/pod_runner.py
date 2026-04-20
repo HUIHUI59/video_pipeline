@@ -767,12 +767,17 @@ def main() -> int:
 
         r2_user_text = (
             "Identify the MOST PROMINENT persons in this video shot "
-            "(UP TO 6 persons max — prioritize foreground / largest "
-            "faces / main characters). Do NOT enumerate every background "
-            "extra; if the shot has >6 people, pick the 6 with the "
-            "largest face area and ignore the rest (the shot-level "
-            "interaction.count captures crowd separately). For each "
-            "selected person, provide:\n"
+            "(UP TO 4 persons max — prioritize foreground / largest "
+            "faces / main characters). You MUST ALSO report the total "
+            "visible person count in the shot (including every "
+            "background extra you can see) as a top-level field "
+            "'visible_person_count_total' (integer). The downstream "
+            "pipeline uses this count to detect and skip crowd shots "
+            "(>4 visible persons), so be honest about the total even "
+            "when you only enumerate 4 in persons[]. Example top-level "
+            'shape: {"persons": [...4 or fewer...], '
+            '"visible_person_count_total": 12}. For each selected '
+            "person in persons[], provide:\n"
             "  - person_index: 0-based integer (0 = largest face or "
             "leftmost)\n"
             "  - spatial_position: one of 'center', 'left', 'right', "
@@ -860,7 +865,47 @@ def main() -> int:
 
         r2_persons = r2_obj.get("persons", []) or []
         n_persons = len(r2_persons)
-        log.info(f"[info] {e.shot_id} R2 发现 {n_persons} 个 person")
+
+        # ── Crowd shot detection ─────────────────────────────────
+        # Stage 4 pre-filter is not 100% reliable (e.g. shot_0106 was
+        # tagged dominant but VLM sees 18 persons). Use R2's
+        # visible_person_count_total (honest total including background)
+        # as the final crowd gate: if > crowd_shot_max_persons (default 4),
+        # skip R1 entirely and write a delivery_v1-compliant record with
+        # exclusion_reason="crowd_shot_excluded (N persons)".
+        crowd_max = int(samp.get("crowd_shot_max_persons", 4))
+        visible_total = r2_obj.get("visible_person_count_total")
+        if not isinstance(visible_total, int):
+            # Fallback: use enumerated persons count (VLM didn't report total)
+            visible_total = n_persons
+        log.info(
+            f"[info] {e.shot_id} R2 发现 {n_persons} 个 person "
+            f"(visible_total={visible_total}, crowd_threshold={crowd_max})"
+        )
+
+        if visible_total > crowd_max:
+            log.info(
+                f"[skip-crowd] {e.shot_id}: visible_total={visible_total} "
+                f"> {crowd_max} → crowd_shot_excluded, 跳过 R1 per-person 推理"
+            )
+            obj: dict[str, Any] = {
+                "shot_id":         e.shot_id,
+                "source_movie":    e.source_movie,
+                "shot_context":    r3_obj.get("shot_context"),
+                "interaction":     r3_obj.get("interaction"),
+                "quality_flags":   r3_obj.get("quality_flags"),
+                "usability_score": r3_obj.get("usability_score"),
+                "persons":         [],
+                "exclusion_reason": (
+                    f"crowd_shot_excluded ({visible_total} visible persons)"
+                ),
+            }
+            infer_ms = infer_ms_r3 + infer_ms_r2
+            # Fall through to normalize + post_fix + validate + write
+            # (shared code path after R1 block).
+            _skip_r1 = True
+        else:
+            _skip_r1 = False
 
         # ── Round 1 per-person：每个 person 独立一次 body_analysis 推理 ──
         # 关键：per-person 调用 → 每次只出 1 人 body (~3K tok)，不会被
@@ -883,6 +928,8 @@ def main() -> int:
         ) or "(none)"
 
         for r2_p in r2_persons:
+            if _skip_r1:
+                break  # crowd shot: obj already built, bypass R1 entirely
             if not isinstance(r2_p, dict):
                 continue
             pidx = r2_p.get("person_index")
@@ -1011,33 +1058,36 @@ def main() -> int:
                 body_by_index[pidx] = None
 
         # ── 合并 R3 + R2 + R1-per-person 到 obj ──
-        obj: dict[str, Any] = {
-            "shot_id":         e.shot_id,
-            "source_movie":    e.source_movie,
-            "shot_context":    r3_obj.get("shot_context"),
-            "interaction":     r3_obj.get("interaction"),
-            "quality_flags":   r3_obj.get("quality_flags"),
-            "usability_score": r3_obj.get("usability_score"),
-            "persons":         [],
-        }
-        if "exclusion_reason" in r3_obj:
-            obj["exclusion_reason"] = r3_obj["exclusion_reason"]
+        # Crowd-skip path already built obj above with persons=[] +
+        # exclusion_reason; bypass the merge in that case.
+        if not _skip_r1:
+            obj = {
+                "shot_id":         e.shot_id,
+                "source_movie":    e.source_movie,
+                "shot_context":    r3_obj.get("shot_context"),
+                "interaction":     r3_obj.get("interaction"),
+                "quality_flags":   r3_obj.get("quality_flags"),
+                "usability_score": r3_obj.get("usability_score"),
+                "persons":         [],
+            }
+            if "exclusion_reason" in r3_obj:
+                obj["exclusion_reason"] = r3_obj["exclusion_reason"]
 
-        for r2_p in r2_persons:
-            if not isinstance(r2_p, dict):
-                continue
-            pidx = r2_p.get("person_index")
-            obj["persons"].append({
-                "person_index":     pidx,
-                "spatial_position": r2_p.get("spatial_position"),
-                "face_analysis":    r2_p.get("face_analysis"),
-                "body_analysis":    body_by_index.get(pidx),
-            })
+            for r2_p in r2_persons:
+                if not isinstance(r2_p, dict):
+                    continue
+                pidx = r2_p.get("person_index")
+                obj["persons"].append({
+                    "person_index":     pidx,
+                    "spatial_position": r2_p.get("spatial_position"),
+                    "face_analysis":    r2_p.get("face_analysis"),
+                    "body_analysis":    body_by_index.get(pidx),
+                })
 
-        if n_persons == 0:
-            log.info(f"[info] {e.shot_id} R2 未识别到 person，persons[]=空")
+            if n_persons == 0:
+                log.info(f"[info] {e.shot_id} R2 未识别到 person，persons[]=空")
 
-        infer_ms = infer_ms_r1 + infer_ms_r2 + infer_ms_r3
+            infer_ms = infer_ms_r1 + infer_ms_r2 + infer_ms_r3
 
         # 2) normalize_tags（动词归一、同义词、forbidden 镜头术语、intensity/tone 归轴）
         try:
