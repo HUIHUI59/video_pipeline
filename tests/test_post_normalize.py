@@ -17,6 +17,7 @@ from src.runpod.post_normalize import (  # noqa: E402
     fix_face_clearly_visible,
     fix_facial_attribute_bools,
     fix_interaction,
+    fix_primary_emotion,
     post_fix_compliance,
 )
 
@@ -413,6 +414,101 @@ class TestFixActionQualityCameraTerms(unittest.TestCase):
     def test_empty_string_tempo_untouched(self):
         obj = self._body({"tempo": ""})
         self.assertEqual(fix_action_quality_camera_terms(obj), 0)
+
+
+class TestFixPrimaryEmotion(unittest.TestCase):
+
+    def _face(self, **kwargs) -> dict:
+        return {"persons": [{"face_analysis": dict(kwargs)}]}
+
+    def test_concern_maps_to_fear(self):
+        # Real Pod 2026-04-20 07:24 shot_0731 root cause.
+        obj = self._face(primary_emotion="concern")
+        fixes = fix_primary_emotion(obj)
+        self.assertEqual(fixes, 1)
+        self.assertEqual(
+            obj["persons"][0]["face_analysis"]["primary_emotion"],
+            "fear",
+        )
+
+    def test_worried_anxious_map_to_fear(self):
+        for synonym in ("worried", "anxious", "nervous", "alarmed"):
+            obj = self._face(primary_emotion=synonym)
+            fix_primary_emotion(obj)
+            self.assertEqual(
+                obj["persons"][0]["face_analysis"]["primary_emotion"],
+                "fear",
+                f"synonym {synonym!r} should map to 'fear'",
+            )
+
+    def test_happy_maps_to_joy(self):
+        obj = self._face(primary_emotion="happy")
+        fix_primary_emotion(obj)
+        self.assertEqual(
+            obj["persons"][0]["face_analysis"]["primary_emotion"], "joy",
+        )
+
+    def test_sad_maps_to_sadness(self):
+        obj = self._face(primary_emotion="sad")
+        fix_primary_emotion(obj)
+        self.assertEqual(
+            obj["persons"][0]["face_analysis"]["primary_emotion"], "sadness",
+        )
+
+    def test_mixed_maps_to_complex(self):
+        obj = self._face(primary_emotion="mixed")
+        fix_primary_emotion(obj)
+        self.assertEqual(
+            obj["persons"][0]["face_analysis"]["primary_emotion"], "complex",
+        )
+
+    def test_valid_enum_untouched(self):
+        obj = self._face(primary_emotion="fear")
+        fixes = fix_primary_emotion(obj)
+        self.assertEqual(fixes, 0)
+        self.assertEqual(
+            obj["persons"][0]["face_analysis"]["primary_emotion"], "fear",
+        )
+
+    def test_unknown_string_falls_back_to_complex(self):
+        obj = self._face(primary_emotion="bewildered-and-lost")
+        fix_primary_emotion(obj)
+        self.assertEqual(
+            obj["persons"][0]["face_analysis"]["primary_emotion"], "complex",
+        )
+
+    def test_case_insensitive_match(self):
+        obj = self._face(primary_emotion="Concern")
+        fix_primary_emotion(obj)
+        self.assertEqual(
+            obj["persons"][0]["face_analysis"]["primary_emotion"], "fear",
+        )
+
+    def test_secondary_emotion_also_coerced(self):
+        obj = self._face(primary_emotion="fear", secondary_emotion="worried")
+        fix_primary_emotion(obj)
+        self.assertEqual(
+            obj["persons"][0]["face_analysis"]["secondary_emotion"], "fear",
+        )
+
+    def test_null_emotion_untouched(self):
+        obj = self._face(primary_emotion="fear", secondary_emotion=None)
+        fixes = fix_primary_emotion(obj)
+        self.assertEqual(fixes, 0)
+        self.assertIsNone(
+            obj["persons"][0]["face_analysis"]["secondary_emotion"],
+        )
+
+    def test_non_string_emotion_to_complex(self):
+        obj = self._face(primary_emotion=3)
+        fix_primary_emotion(obj)
+        self.assertEqual(
+            obj["persons"][0]["face_analysis"]["primary_emotion"], "complex",
+        )
+
+    def test_missing_face_analysis_no_crash(self):
+        obj = {"persons": [{"body_analysis": {}}]}
+        self.assertEqual(fix_primary_emotion(obj), 0)
 
 
 class TestPostFixCompliance(unittest.TestCase):

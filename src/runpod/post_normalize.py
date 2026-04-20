@@ -45,7 +45,112 @@ __all__ = [
     "fix_face_clearly_visible",
     "fix_facial_attribute_bools",
     "fix_action_quality_camera_terms",
+    "fix_primary_emotion",
 ]
+
+VALID_EMOTIONS: frozenset[str] = frozenset({
+    "anger", "sadness", "joy", "fear", "surprise",
+    "disgust", "contempt", "neutral", "complex",
+})
+
+# VLM-observed non-enum emotion words → canonical Emotion enum.
+# All keys lowercased. Motivation: Pod 2026-04-20 07:24 shot_0731 output
+# primary_emotion='concern' which is semantically close to 'fear' but not
+# in the 9-class taxonomy, causing Pydantic schema_validation_failed.
+EMOTION_SYNONYMS: dict[str, str] = {
+    # fear family
+    "concern":        "fear",
+    "concerned":      "fear",
+    "worry":          "fear",
+    "worried":        "fear",
+    "anxious":        "fear",
+    "anxiety":        "fear",
+    "nervous":        "fear",
+    "apprehension":   "fear",
+    "apprehensive":   "fear",
+    "uneasy":         "fear",
+    "tense":          "fear",
+    "alarmed":        "fear",
+    "panic":          "fear",
+    "dread":          "fear",
+    # sadness family
+    "sad":            "sadness",
+    "sorrow":         "sadness",
+    "sorrowful":      "sadness",
+    "melancholy":     "sadness",
+    "grief":          "sadness",
+    "grieving":       "sadness",
+    "despair":        "sadness",
+    "despondent":     "sadness",
+    "down":           "sadness",
+    "blue":           "sadness",
+    "gloomy":         "sadness",
+    "heartbroken":    "sadness",
+    # joy family
+    "happy":          "joy",
+    "happiness":      "joy",
+    "joyful":         "joy",
+    "cheerful":       "joy",
+    "content":        "joy",
+    "contentment":    "joy",
+    "pleased":        "joy",
+    "delighted":      "joy",
+    "elated":         "joy",
+    "excited":        "joy",
+    "excitement":     "joy",
+    "amused":         "joy",
+    "amusement":      "joy",
+    # anger family
+    "angry":          "anger",
+    "furious":        "anger",
+    "rage":           "anger",
+    "irritated":      "anger",
+    "irritation":     "anger",
+    "annoyed":        "anger",
+    "annoyance":      "anger",
+    "frustrated":     "anger",
+    "frustration":    "anger",
+    "hostile":        "anger",
+    # surprise family
+    "surprised":      "surprise",
+    "shocked":        "surprise",
+    "astonished":     "surprise",
+    "astonishment":   "surprise",
+    "stunned":        "surprise",
+    "amazed":         "surprise",
+    # disgust family
+    "disgusted":      "disgust",
+    "revolted":       "disgust",
+    "repulsed":       "disgust",
+    "distaste":       "disgust",
+    # contempt family
+    "contemptuous":   "contempt",
+    "disdain":        "contempt",
+    "scornful":       "contempt",
+    "mocking":        "contempt",
+    # neutral / calm
+    "calm":           "neutral",
+    "composed":       "neutral",
+    "neutral-faced":  "neutral",
+    "impassive":      "neutral",
+    "stoic":          "neutral",
+    "blank":          "neutral",
+    "expressionless": "neutral",
+    "thoughtful":     "neutral",
+    "contemplative":  "neutral",
+    "focused":        "neutral",
+    "attentive":      "neutral",
+    # complex / mixed
+    "mixed":          "complex",
+    "conflicted":     "complex",
+    "bittersweet":    "complex",
+    "ambivalent":     "complex",
+    "torn":           "complex",
+    "complicated":    "complex",
+    "mixed emotion":  "complex",
+    "mixed emotions": "complex",
+    "mixed feelings": "complex",
+}
 
 VALID_COUNTS:    frozenset[str] = frozenset({"solo", "dyadic", "triadic", "crowd"})
 VALID_CONTACTS:  frozenset[str] = frozenset({"none", "incidental", "sustained"})
@@ -292,6 +397,63 @@ def _contains_camera_term(value: str) -> bool:
     return any(term in v for term in ACTION_CAMERA_TERMS)
 
 
+def fix_primary_emotion(obj: dict[str, Any]) -> int:
+    """Coerce ``face_analysis.{primary,secondary}_emotion`` into the 9-class
+    delivery_v1 Emotion enum.
+
+    Motivation (Pod 2026-04-20 07:24 shot_0731):
+      VLM emitted ``primary_emotion='concern'`` — semantically close to
+      ``fear`` but outside the Literal enum, causing Pydantic
+      ``schema_validation_failed`` and blocking the shot.
+
+    Strategy:
+      - If the value is already in VALID_EMOTIONS → keep as-is.
+      - Else lowercase + look up EMOTION_SYNONYMS.
+      - Non-matchable string or bad type → ``'complex'`` (catchall that
+        delivery_v1 reserves for mixed / ambiguous affect). Prefer
+        ``'complex'`` over ``'neutral'`` so downstream sees a deliberate
+        ambiguity marker rather than an implicit "no emotion".
+
+    ``secondary_emotion`` is Optional — only coerce when it's a
+    non-null, non-valid string.
+
+    Returns the number of field-level fixes applied.
+    """
+    fixes = 0
+    persons = obj.get("persons")
+    if not isinstance(persons, list):
+        return 0
+
+    for p in persons:
+        if not isinstance(p, dict):
+            continue
+        fa = p.get("face_analysis")
+        if not isinstance(fa, dict):
+            continue
+
+        for key in ("primary_emotion", "secondary_emotion"):
+            v = fa.get(key)
+            if v is None:
+                continue
+            if v in VALID_EMOTIONS:
+                continue
+            if isinstance(v, str):
+                low = v.strip().lower()
+                if low in VALID_EMOTIONS:
+                    fa[key] = low
+                elif low in EMOTION_SYNONYMS:
+                    fa[key] = EMOTION_SYNONYMS[low]
+                else:
+                    fa[key] = "complex"
+                fixes += 1
+            else:
+                # Non-string (int/bool) — coerce to 'complex' as safest default.
+                fa[key] = "complex"
+                fixes += 1
+
+    return fixes
+
+
 def fix_action_quality_camera_terms(obj: dict[str, Any]) -> int:
     """Scrub camera terms from ``body_analysis.action_quality.{tempo,tone}``.
 
@@ -349,16 +511,17 @@ def post_fix_compliance(
 
     Returns the same dict for chaining.
     """
-    n_inter = fix_interaction(obj)
-    n_gate  = fix_face_clearly_visible(obj)
-    n_bool  = fix_facial_attribute_bools(obj)
-    n_cam   = fix_action_quality_camera_terms(obj)
-    total = n_inter + n_gate + n_bool + n_cam
+    n_inter   = fix_interaction(obj)
+    n_gate    = fix_face_clearly_visible(obj)
+    n_bool    = fix_facial_attribute_bools(obj)
+    n_cam     = fix_action_quality_camera_terms(obj)
+    n_emotion = fix_primary_emotion(obj)
+    total = n_inter + n_gate + n_bool + n_cam + n_emotion
     if log is not None and total > 0:
         shot_id = obj.get("shot_id", "?")
         log.info(
             f"[post-fix] {shot_id}: interaction={n_inter} "
             f"face_gate={n_gate} face_bools={n_bool} "
-            f"action_camera={n_cam} total={total}"
+            f"action_camera={n_cam} emotion={n_emotion} total={total}"
         )
     return obj
