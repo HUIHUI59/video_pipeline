@@ -94,7 +94,8 @@ sampling:
   # 效果：VLM 能看清眼眉嘴，facial_components / blendshape_hints 显著提升
   face_crop_enabled: true
   face_crop_size: 224               # 裁到 224×224
-  face_crop_per_frame_max: 4        # 每帧最多保留 4 张脸（按面积降序）
+  face_crop_per_frame_max: 2        # 每帧最多保留 2 张脸（按面积降序）。降自 4 →
+                                    # 避免长 shot (>10s) 产生 20+ crops 挤压 R2 output 空间导致截断
   face_crop_sample_fps: 2           # 裁脸帧率（不用 5，2 足够覆盖表情动态）
   face_detector: haar               # haar (cv2 内置) | yolo_face (需 yolov8n-face.pt)
 
