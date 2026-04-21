@@ -38,10 +38,11 @@ def _threshold_decide(mean_b, std_b, sharp, thresholds, camera_motion=None):
 
 
 def _defaults():
+    """Return (defaults=spec values as current module constants, strict=QUALITY_STRICT_MODE)."""
     from shot_classify import (
         QUALITY_MIN_BRIGHTNESS, QUALITY_MAX_BRIGHTNESS,
         QUALITY_MIN_CONTRAST, QUALITY_MIN_SHARPNESS,
-        QUALITY_MAX_CAMERA_MOTION, QUALITY_SPEC_MODE,
+        QUALITY_MAX_CAMERA_MOTION, QUALITY_STRICT_MODE,
     )
     return {
         "min_brightness":    QUALITY_MIN_BRIGHTNESS,
@@ -49,40 +50,52 @@ def _defaults():
         "min_contrast":      QUALITY_MIN_CONTRAST,
         "min_sharpness":     QUALITY_MIN_SHARPNESS,
         "max_camera_motion": QUALITY_MAX_CAMERA_MOTION,
-    }, QUALITY_SPEC_MODE
+    }, QUALITY_STRICT_MODE
 
 
-def test_defaults_are_strict():
-    strict, spec = _defaults()
-    # 规范默认更宽松：下界更小，上界更大
-    assert strict["min_brightness"] >= spec["min_brightness"]
-    assert strict["max_brightness"] <= spec["max_brightness"]
-    assert strict["min_contrast"]   >= spec["min_contrast"]
-    assert strict["min_sharpness"]  >= spec["min_sharpness"]
+def test_defaults_are_spec():
+    """Module defaults should be spec values (looser); strict mode tightens them."""
+    defaults, strict = _defaults()
+    # strict 更严：下界更大（越高越拒）、上界更小（越低越拒）
+    assert defaults["min_brightness"] <= strict["min_brightness"]
+    assert defaults["max_brightness"] >= strict["max_brightness"]
+    assert defaults["min_contrast"]   <= strict["min_contrast"]
+    assert defaults["min_sharpness"]  <= strict["min_sharpness"]
+    # camera_motion 两种模式一致（教授标准 6.0）
+    assert defaults["max_camera_motion"] == strict["max_camera_motion"]
 
 
-def test_borderline_shot_blocked_in_strict_passed_in_spec():
-    """亮度/对比度/清晰度都处于 strict 严、spec 松之间的边界值。
-    严格模式 quality_ok=False；规范模式 quality_ok=True。"""
-    strict, spec = _defaults()
+def test_borderline_shot_passed_by_default_blocked_by_strict():
+    """亮度/对比度/清晰度都处于 spec 松、strict 严之间的边界值。
+    默认（spec）quality_ok=True；strict 模式 quality_ok=False。"""
+    defaults, strict = _defaults()
     # 挑每个指标在"介于 spec 和 strict 之间"的值
     mean_b = 20.0   # spec 12..242 allows；strict 25..230 blocks (too_dark)
     std_b  = 10.0   # spec 5 allows；strict 15 blocks (low_contrast)
     sharp  = 30.0   # spec 15 allows；strict 50 blocks (blurry)
 
-    issues_strict, ok_strict = _threshold_decide(mean_b, std_b, sharp, strict)
-    issues_spec,   ok_spec   = _threshold_decide(mean_b, std_b, sharp, spec)
+    issues_default, ok_default = _threshold_decide(mean_b, std_b, sharp, defaults)
+    issues_strict,  ok_strict  = _threshold_decide(mean_b, std_b, sharp, strict)
+    assert ok_default, f"spec should accept: {issues_default}"
     assert not ok_strict, f"strict should reject: {issues_strict}"
-    assert ok_spec, f"spec should accept: {issues_spec}"
 
 
 def test_spec_mode_values_match_delivery_v1():
-    """Regression lock：spec mode 是 12/242/5/15（04_shot_classify.md 规范默认值）。"""
-    _, spec = _defaults()
-    assert spec["min_brightness"] == 12.0
-    assert spec["max_brightness"] == 242.0
-    assert spec["min_contrast"]   == 5.0
-    assert spec["min_sharpness"]  == 15.0
+    """Regression lock：默认 mode 是 12/242/5/15（04_shot_classify.md 规范默认值）。"""
+    defaults, _ = _defaults()
+    assert defaults["min_brightness"] == 12.0
+    assert defaults["max_brightness"] == 242.0
+    assert defaults["min_contrast"]   == 5.0
+    assert defaults["min_sharpness"]  == 15.0
+
+
+def test_strict_mode_values():
+    """Regression lock：strict 模式保留老阈值 25/230/15/50。"""
+    _, strict = _defaults()
+    assert strict["min_brightness"] == 25.0
+    assert strict["max_brightness"] == 230.0
+    assert strict["min_contrast"]   == 15.0
+    assert strict["min_sharpness"]  == 50.0
 
 
 def test_manifestentry_accepts_new_bbox_fields():
@@ -186,9 +199,10 @@ def test_face_detector_falls_back_when_mediapipe_missing(monkeypatch):
 
 
 if __name__ == "__main__":
-    tests = [test_defaults_are_strict,
-             test_borderline_shot_blocked_in_strict_passed_in_spec,
+    tests = [test_defaults_are_spec,
+             test_borderline_shot_passed_by_default_blocked_by_strict,
              test_spec_mode_values_match_delivery_v1,
+             test_strict_mode_values,
              test_manifestentry_accepts_new_bbox_fields,
              test_camera_shake_threshold_logic,
              test_spec_mode_includes_max_camera_motion,

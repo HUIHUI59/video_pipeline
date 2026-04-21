@@ -121,8 +121,8 @@ output_dir/clips/                      output_dir/manifest/
 
 跨 5 帧的均值落到以下范围就打 issue：
 
-| Issue | 判据 | spec 模式阈值 | strict 模式阈值 |
-|-------|------|---------------|-----------------|
+| Issue | 判据 | spec 模式（**默认**） | strict 模式（`--quality-mode strict`） |
+|-------|------|------------------------|-----------------------------------------|
 | `too_dark` | 亮度均值 < 阈值 | 12 | 25 |
 | `too_bright` | 亮度均值 > 阈值 | 242 | 230 |
 | `low_contrast` | 亮度标准差 < 阈值 | 5 | 15 |
@@ -131,7 +131,11 @@ output_dir/clips/                      output_dir/manifest/
 
 只要命中任意一条 → `quality_ok = False`。upload.py 默认跳过所有 `quality_ok=False` 的 shot，避免浪费 H100 去标注废片。
 
-阈值优先级：CLI flag (`--brightness-min` / `--camera-motion-max` 等) > `--quality-config` YAML > `--quality-mode spec` > 模块常量（strict）。
+**默认是 spec 模式**（2026-04-21 起）——对电影素材软光影更友好，`blurry` 阈值从 strict 的 50
+调到 15，避免把大量文艺片镜头误判成模糊。想回到老阈值的 COCO-grade 清晰度检查就加
+`--quality-mode strict`。
+
+阈值优先级：CLI flag (`--brightness-min` / `--camera-motion-max` 等) > `--quality-config` YAML > `--quality-mode strict`（切换到严格） > 模块常量（spec 默认）。
 
 ## 运行方式
 

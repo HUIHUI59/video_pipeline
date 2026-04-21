@@ -70,22 +70,31 @@ DEFAULT_SINGLE_RATIO   = 0.15               # 脸框占帧面积 ≥15% 视为 c
 DEFAULT_WIDE_RATIO     = 0.03               # 脸框占帧面积 ≤3% 视为 wide
 DEFAULT_SAMPLE_FRACS   = (0.15, 0.30, 0.50, 0.70, 0.85)   # 5 帧，避开首尾过渡
 
-# 画质阈值（灰度 0-255）—— 默认"严格模式"（偏安全，历史行为）
-# delivery_v1 规范默认值（更宽松）：12 / 242 / 5 / 15
+# 画质阈值（灰度 0-255）—— 默认"spec 模式"（delivery_v1 规范值，适合电影软光影）
+# 历史行为（更严）通过 --quality-mode strict 恢复。
 # 通过 --quality-config YAML 或 --brightness-min / --brightness-max /
-# --contrast-min / --sharpness-min CLI flag 覆盖。
-QUALITY_MIN_BRIGHTNESS  = 25.0   # 均值 < 该值 → too_dark
-QUALITY_MAX_BRIGHTNESS  = 230.0  # 均值 > 该值 → too_bright
-QUALITY_MIN_CONTRAST    = 15.0   # 标准差 < 该值 → low_contrast
-QUALITY_MIN_SHARPNESS   = 50.0   # Laplacian 方差 < 该值 → blurry
+# --contrast-min / --sharpness-min / --camera-motion-max CLI flag 覆盖。
+QUALITY_MIN_BRIGHTNESS  = 12.0   # 均值 < 该值 → too_dark
+QUALITY_MAX_BRIGHTNESS  = 242.0  # 均值 > 该值 → too_bright
+QUALITY_MIN_CONTRAST    = 5.0    # 标准差 < 该值 → low_contrast
+QUALITY_MIN_SHARPNESS   = 15.0   # Laplacian 方差 < 该值 → blurry
 QUALITY_MAX_CAMERA_MOTION = 6.0  # Farneback 光流平均位移（480-宽灰图）> 该值 → camera_shake
 
-# 规范模式快捷值（--quality-mode spec 会应用这五个）
+# 规范模式快捷值（--quality-mode spec 会应用这五个；跟模块默认一致）
 QUALITY_SPEC_MODE = {
-    "min_brightness": 12.0,
-    "max_brightness": 242.0,
-    "min_contrast":    5.0,
-    "min_sharpness":  15.0,
+    "min_brightness":    QUALITY_MIN_BRIGHTNESS,
+    "max_brightness":    QUALITY_MAX_BRIGHTNESS,
+    "min_contrast":      QUALITY_MIN_CONTRAST,
+    "min_sharpness":     QUALITY_MIN_SHARPNESS,
+    "max_camera_motion": QUALITY_MAX_CAMERA_MOTION,
+}
+
+# 严格模式（--quality-mode strict 会应用这五个；沿用历史默认，保留给 COCO-grade 清晰度场景）
+QUALITY_STRICT_MODE = {
+    "min_brightness":    25.0,
+    "max_brightness":    230.0,
+    "min_contrast":      15.0,
+    "min_sharpness":     50.0,
     "max_camera_motion": 6.0,
 }
 
@@ -842,8 +851,8 @@ def main():
                              "min_contrast/min_sharpness。优先级低于下面 4 个 CLI flag。")
     parser.add_argument("--quality-mode", type=str, default="",
                         choices=["", "strict", "spec"],
-                        help="'spec' = delivery_v1 规范默认值 12/242/5/15；"
-                             "'strict'/空 = 严格模式（25/230/15/50，历史默认）。")
+                        help="'spec'/空（默认）= delivery_v1 规范值 12/242/5/15（电影素材推荐）；"
+                             "'strict' = 严格模式（25/230/15/50，历史默认，适合 COCO 级清晰度要求）。")
     parser.add_argument("--brightness-min", type=float, default=None)
     parser.add_argument("--brightness-max", type=float, default=None)
     parser.add_argument("--contrast-min",   type=float, default=None)
@@ -855,7 +864,7 @@ def main():
                         help="跳过光流抖动检测（省时间，但 manifest 没 camera_motion）")
     args = parser.parse_args()
 
-    # ── 解析画质阈值：优先级 CLI flag > YAML > --quality-mode > 严格模式常量
+    # ── 解析画质阈值：优先级 CLI flag > YAML > --quality-mode > 模块默认（= spec）
     quality_thresholds: dict[str, float] = {
         "min_brightness":    QUALITY_MIN_BRIGHTNESS,
         "max_brightness":    QUALITY_MAX_BRIGHTNESS,
@@ -863,8 +872,9 @@ def main():
         "min_sharpness":     QUALITY_MIN_SHARPNESS,
         "max_camera_motion": QUALITY_MAX_CAMERA_MOTION,
     }
-    if args.quality_mode == "spec":
-        quality_thresholds.update(QUALITY_SPEC_MODE)
+    if args.quality_mode == "strict":
+        quality_thresholds.update(QUALITY_STRICT_MODE)
+    # "spec" 或 "" 都保持模块默认（本来就是 spec 值）
     if args.quality_config:
         try:
             import yaml as _yaml
