@@ -346,6 +346,8 @@ class ManifestQuality(_Base):
     mean_brightness: float
     brightness_std:  float
     sharpness:       float
+    # v3 新增（镜头抖动；可选，旧 manifest 无此字段）
+    camera_motion:   Optional[float] = None
     issues:          list[str] = Field(default_factory=list)
 
 

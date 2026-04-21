@@ -54,6 +54,7 @@ output_dir/clips/                      output_dir/manifest/
     "mean_brightness": 85.3,
     "brightness_std": 42.1,
     "sharpness": 123.5,
+    "camera_motion": 0.162,
     "issues": []
   }
 }
@@ -67,7 +68,7 @@ output_dir/clips/                      output_dir/manifest/
 | `source_movie` | str | movie_stem | ✓ | v1 | upload, pod_runner | 源电影目录名（Stage 1 输出的 mp4 文件名去扩展名） |
 | `path` | str | 相对或绝对 | ✓ | v1 | upload (本地→Pod 映射) | 指向 `shot_*.mp4` 的路径，一般 `clips/<movie>/shot_NNN.mp4` |
 | `num_people` | int | ≥ 0 | ✓ | v1 | pod_runner (prompt) | **跨 5 帧取 max** 的 YOLO 人体检测计数 |
-| `num_faces` | int \| null | ≥ 0 | opt | v2 | pod_runner (prompt hint) | **跨 5 帧取 max** 的 Haar Cascade 人脸计数；旧 manifest 无此字段 |
+| `num_faces` | int \| null | ≥ 0 | opt | v2 | pod_runner (prompt hint) | **跨 5 帧取 max** 的人脸计数；MediaPipe Tasks FaceDetector（conf≥0.5）为首选，退回 YOLO / Haar（旧 manifest 是 Haar） |
 | `shot_category` | str | `single`\|`dominant`\|`multi`\|`wide`\|`landscape` | ✓ | v1 | upload (filter), pod_runner (采 4 或 8 帧) | **核心分类结果**。规则见下文 |
 | `duration_sec` | float | ≥ 0 | ✓ | v1 | pod_runner (prompt) | clip 时长（秒） |
 | `width` | int | ≥ 0 | ✓ | v1 | pod_runner (prompt) | clip 宽度（像素，基本是 1920） |
@@ -81,10 +82,12 @@ output_dir/clips/                      output_dir/manifest/
 | `quality_metrics.mean_brightness` | float | [0, 255] | opt | v2 | diagnostic | 跨 5 帧灰度均值的均值 |
 | `quality_metrics.brightness_std` | float | [0, 255] | opt | v2 | diagnostic | 跨 5 帧灰度标准差的均值（对比度代理） |
 | `quality_metrics.sharpness` | float | [0, ∞) | opt | v2 | diagnostic | 跨 5 帧 Laplacian 方差的均值（清晰度代理） |
-| `quality_metrics.issues` | list[str] | `too_dark`\|`too_bright`\|`low_contrast`\|`blurry` | opt | v2 | 人工排错 | 具体触发了哪些 issue |
+| `quality_metrics.camera_motion` | float \| null | [0, ∞) | opt | v3 | filter_clips (抖动过滤) | 中央 5 帧 Farneback 光流平均位移（px/frame on 480-wide gray）；>6.0 判 `camera_shake` |
+| `quality_metrics.issues` | list[str] | `too_dark`\|`too_bright`\|`low_contrast`\|`blurry`\|`camera_shake` | opt | v2/v3 | 人工排错 | 具体触发了哪些 issue；`camera_shake` 需要 camera_motion 字段 |
 
 - **v1** = 从 Stage 4 诞生第一天起就有的字段，总是存在
 - **v2** = 后续加的字段，在旧 manifest 里可能不存在；upload 做了向后兼容（字段是 `None` 视为 v1 不过滤）
+- **v3** = MediaPipe + 光流升级（2026-04-21）后加的字段；`camera_motion` 和 `camera_shake` issue
 
 ## `shot_category` 分类规则
 
@@ -107,14 +110,17 @@ output_dir/clips/                      output_dir/manifest/
 
 跨 5 帧的均值落到以下范围就打 issue：
 
-| Issue | 判据 | 阈值（默认） |
-|-------|------|-------------|
-| `too_dark` | 亮度均值 < 阈值 | 12 |
-| `too_bright` | 亮度均值 > 阈值 | 242 |
-| `low_contrast` | 亮度标准差 < 阈值 | 5 |
-| `blurry` | Laplacian 方差 < 阈值 | 15 |
+| Issue | 判据 | spec 模式阈值 | strict 模式阈值 |
+|-------|------|---------------|-----------------|
+| `too_dark` | 亮度均值 < 阈值 | 12 | 25 |
+| `too_bright` | 亮度均值 > 阈值 | 242 | 230 |
+| `low_contrast` | 亮度标准差 < 阈值 | 5 | 15 |
+| `blurry` | Laplacian 方差 < 阈值 | 15 | 50 |
+| `camera_shake` | 中央 5 帧 Farneback 光流平均位移 > 阈值（px/frame, 480-宽灰图） | 6.0 | 6.0 |
 
 只要命中任意一条 → `quality_ok = False`。upload.py 默认跳过所有 `quality_ok=False` 的 shot，避免浪费 H100 去标注废片。
+
+阈值优先级：CLI flag (`--brightness-min` / `--camera-motion-max` 等) > `--quality-config` YAML > `--quality-mode spec` > 模块常量（strict）。
 
 ## 运行方式
 
@@ -177,16 +183,42 @@ Stage 4 用 `classify_queue`。
 
 代码按优先级尝试：
 
-1. **本地已下载的 YOLO face 模型**（`--face-model` 指定路径存在时）—— 最准
-2. **OpenCV Haar Cascade**（`opencv-python` 自带的 `haarcascade_frontalface_default.xml`）—— fallback，够用
-3. **都没有** → 降级为**只用人体检测**，所有有人的镜头都归 `wide`（分不出 close-up）
+0. **MediaPipe Tasks FaceDetector**（`blaze_face_full_range.tflite`, `min_detection_confidence=0.5`）
+   —— **默认**，精度最高、假阳性少（画/雕像/反光基本不误判）
+1. **本地已下载的 YOLO face 模型**（`--face-model` 指定路径存在时）—— 次选
+2. **OpenCV Haar Cascade**（`opencv-python` 自带）—— 最后兜底
+3. **都没有** → 降级为**只用人体检测**，所有有人的镜头都归 `wide`
 
-worker 启动时会在日志里打印 `脸检测：使用 OpenCV Haar Cascade`（或类似），**没这行就说明降级了**。
+worker 启动时会在日志里打印 `脸检测：使用 MediaPipe Tasks FaceDetector (...)`（或 YOLO / Haar），
+**没这行就说明降级了**。
+
+### MediaPipe 模型文件
+
+`blaze_face_full_range.tflite` 约 1.1 MB，首次使用自动下载到：
+
+```
+$HOME/.cache/mediapipe-models/blaze_face_full_range.tflite
+```
+
+可通过环境变量 `MEDIAPIPE_FACE_MODEL_PATH` 指定别的路径（例如共享目录避免每台机器重复下）。
+
+### MediaPipe 对 num_faces 的影响
+
+跟老的 OpenCV Haar Cascade 相比：
+- MediaPipe 的假阳性显著减少（约 10% "landscape + num_faces≥1" 的噪声去掉）
+- `largest_face_ratio` 分布整体右移（bbox 更贴实脸，往往稍大 / 更稳定）
+- `num_faces` 会更保守（侧脸被漏掉的比 Haar 略多，但置信阈值 0.5 可调）
+
+## 光流 / 抖动检测（`camera_motion`）
+
+对每个 clip 从中间位置连续采 5 帧，相邻帧对做 OpenCV Farneback 密集光流（下采样到 480 宽以省时），
+相邻对的平均 L2 位移取 max 作为 `camera_motion`（单位：px/frame）。默认阈值 6.0：
+高于该值加 `"camera_shake"` 到 issues，`quality_ok=False`。`--skip-motion-detect` 可跳过。
 
 ## 性能参考
 
-- YOLOv8-L + Haar + 5 帧 + 画质计算 ≈ **0.3-1 s/clip**（瓶颈在磁盘读 + YOLO 推理）
-- 208k clips / 2 机并行 ≈ **1.5-2 天**
+- MediaPipe + YOLO + Farneback + 5 帧 + 画质 ≈ **0.7–1.5 s/clip**（稳态，冷启动约 7–11s）
+- 208k clips / 3 机并行 ≈ **12–24 小时**
 
 ## 验证 manifest
 

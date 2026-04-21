@@ -78,14 +78,20 @@ QUALITY_MIN_BRIGHTNESS  = 25.0   # 均值 < 该值 → too_dark
 QUALITY_MAX_BRIGHTNESS  = 230.0  # 均值 > 该值 → too_bright
 QUALITY_MIN_CONTRAST    = 15.0   # 标准差 < 该值 → low_contrast
 QUALITY_MIN_SHARPNESS   = 50.0   # Laplacian 方差 < 该值 → blurry
+QUALITY_MAX_CAMERA_MOTION = 6.0  # Farneback 光流平均位移（480-宽灰图）> 该值 → camera_shake
 
-# 规范模式快捷值（--quality-mode spec 会应用这四个）
+# 规范模式快捷值（--quality-mode spec 会应用这五个）
 QUALITY_SPEC_MODE = {
     "min_brightness": 12.0,
     "max_brightness": 242.0,
     "min_contrast":    5.0,
     "min_sharpness":  15.0,
+    "max_camera_motion": 6.0,
 }
+
+# 光流抖动检测参数
+CAMERA_MOTION_N_SAMPLE_FRAMES = 5   # 中间位置连续采几帧做光流
+CAMERA_MOTION_RESIZE_WIDTH    = 480 # Farneback 前下采样宽度（原生 1920 上太慢）
 
 # ══════════════════════════════════════════════════════════════
 # 日志
@@ -147,14 +153,43 @@ def get_yolo(model_path: str):
         return _yolo_cache[model_path]
 
 
-# ── 脸检测：OpenCV Haar Cascade（opencv-python 自带，无需下载）────────
+# ── 脸检测 tier fallback ─────────────────────────────────────────────
 # 优先级：
-#   1. 本地已下载的 YOLO face 模型（yolo_face_path，若存在）—— 最准
-#   2. OpenCV Haar Cascade（随 opencv-python 自带）—— 通用 fallback
+#   0. MediaPipe Tasks FaceDetector（blaze_face_full_range.tflite, conf>=0.5）
+#      — 精度高、假阳性少（画 / 雕像 / 反光基本不误判）
+#   1. 本地已下载的 YOLO face 模型（yolo_face_path，若存在）
+#   2. OpenCV Haar Cascade（opencv-python 自带）—— 最后兜底
 #   3. None —— 警告后降级为仅人体检测
+#
+# 注意：MediaPipe FaceDetector 实例在进程内共享，不是线程安全。
+# 当前 classify 默认 --workers 1，安全。如未来改多 worker，每个 worker 应自建实例。
 _face_detector = None
-_face_backend: str = ""          # "yolo_face" | "haar" | "none"
+_face_backend: str = ""          # "mediapipe" | "yolo_face" | "haar" | "none"
 _face_lock = threading.Lock()
+MEDIAPIPE_MIN_CONF = 0.5         # 教授标准
+# 官方 Google Cloud 下载链接；换成镜像就改这一行
+MEDIAPIPE_MODEL_URL = (
+    "https://storage.googleapis.com/mediapipe-models/"
+    "face_detector/blaze_face_full_range/float16/latest/"
+    "blaze_face_full_range.tflite"
+)
+MEDIAPIPE_MODEL_DEFAULT_PATH = str(
+    Path.home() / ".cache" / "mediapipe-models" / "blaze_face_full_range.tflite"
+)
+
+
+def _mediapipe_model_path() -> str:
+    """Return cached tflite path; download on first use."""
+    p = Path(os.environ.get("MEDIAPIPE_FACE_MODEL_PATH",
+                            MEDIAPIPE_MODEL_DEFAULT_PATH)).expanduser()
+    if p.exists():
+        return str(p)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    import urllib.request
+    log.info(f"首次使用 MediaPipe：下载模型 {MEDIAPIPE_MODEL_URL} → {p}")
+    urllib.request.urlretrieve(MEDIAPIPE_MODEL_URL, str(p))
+    return str(p)
+
 
 def get_face_detector(yolo_face_path: str | None = None):
     global _face_detector, _face_backend
@@ -164,18 +199,38 @@ def get_face_detector(yolo_face_path: str | None = None):
         if _face_detector is not None or _face_backend == "none":
             return _face_detector, _face_backend
 
-        # 1) 优先用本地 YOLO face 模型
+        # 0) 优先用 MediaPipe Tasks FaceDetector（0.10.30+ 官方 API）
+        try:
+            import mediapipe as mp  # noqa: F401 — ensure package importable
+            from mediapipe.tasks import python as mp_py
+            from mediapipe.tasks.python import vision as mp_vision
+            model_path = _mediapipe_model_path()
+            base = mp_py.BaseOptions(model_asset_path=model_path)
+            opts = mp_vision.FaceDetectorOptions(
+                base_options=base,
+                min_detection_confidence=MEDIAPIPE_MIN_CONF,
+            )
+            fd = mp_vision.FaceDetector.create_from_options(opts)
+            _face_detector = fd
+            _face_backend = "mediapipe"
+            log.info(
+                f"脸检测：使用 MediaPipe Tasks FaceDetector "
+                f"(full-range, conf>={MEDIAPIPE_MIN_CONF})"
+            )
+            return _face_detector, _face_backend
+        except Exception as e:
+            log.info(f"MediaPipe 不可用 ({e})，fallback 到 YOLO/Haar")
+
+        # 1) 本地 YOLO face 模型
         if yolo_face_path:
             try:
                 from ultralytics import YOLO
                 p = Path(yolo_face_path).expanduser()
-                if p.exists() or not yolo_face_path.endswith(".pt") is False:
-                    # 只在文件存在时加载，避免触发 ultralytics 的网络下载
-                    if p.exists():
-                        _face_detector = YOLO(str(p))
-                        _face_backend = "yolo_face"
-                        log.info(f"脸检测：使用 YOLO {yolo_face_path}")
-                        return _face_detector, _face_backend
+                if p.exists():
+                    _face_detector = YOLO(str(p))
+                    _face_backend = "yolo_face"
+                    log.info(f"脸检测：使用 YOLO {yolo_face_path}")
+                    return _face_detector, _face_backend
             except Exception as e:
                 log.info(f"YOLO face 模型不可用 ({e})，使用 OpenCV Haar")
 
@@ -188,7 +243,7 @@ def get_face_detector(yolo_face_path: str | None = None):
                 raise RuntimeError(f"Haar cascade xml 加载为空: {xml}")
             _face_detector = cas
             _face_backend = "haar"
-            log.info("脸检测：使用 OpenCV Haar Cascade")
+            log.info("脸检测：使用 OpenCV Haar Cascade（兜底）")
             return _face_detector, _face_backend
         except Exception as e:
             log.warning(f"Haar Cascade 加载失败 ({e})")
@@ -205,6 +260,28 @@ def detect_faces(frame) -> tuple[int, list[float]]:
     det, backend = get_face_detector()
     if det is None:
         return 0, []
+
+    if backend == "mediapipe":
+        try:
+            import cv2
+            import mediapipe as mp
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+            result = det.detect(mp_img)
+        except Exception:
+            return 0, []
+        detections = getattr(result, "detections", None) or []
+        if not detections:
+            return 0, []
+        h, w = frame.shape[:2]
+        frame_area = max(1, w * h)
+        ratios = []
+        for d in detections:
+            bb = d.bounding_box  # pixel coords: origin_x/y + width/height
+            area = max(0, int(bb.width)) * max(0, int(bb.height))
+            r = max(0.0, min(1.0, area / frame_area))
+            ratios.append(r)
+        return len(ratios), ratios
 
     if backend == "yolo_face":
         n, r, _bb = _detect_boxes(det, frame, DEFAULT_FACE_CONF, class_filter=None)
@@ -237,6 +314,53 @@ def _manifest_lock(path: str) -> threading.Lock:
             lk = threading.Lock()
             _manifest_locks[path] = lk
         return lk
+
+
+def _compute_camera_motion(
+    cap,
+    mid_idx: int,
+    n_sample: int = CAMERA_MOTION_N_SAMPLE_FRAMES,
+    resize_width: int = CAMERA_MOTION_RESIZE_WIDTH,
+) -> Optional[float]:
+    """粗略估计整 clip 的镜头抖动程度。
+
+    实现：从镜头中央位置连续采 ``n_sample`` 帧，相邻帧对计算
+    Farneback 密集光流，返回每对 L2 位移的均值中的最大值（px/frame）。
+    下采样到 ``resize_width`` 宽以保速。失败返回 None，不阻塞主流程。
+    """
+    try:
+        import cv2
+        import numpy as np
+    except Exception:
+        return None
+    try:
+        frames = []
+        for off in range(n_sample):
+            cap.set(cv2.CAP_PROP_POS_FRAMES, max(0, mid_idx + off))
+            ok, f = cap.read()
+            if not ok or f is None:
+                break
+            gray = cv2.cvtColor(f, cv2.COLOR_BGR2GRAY)
+            h, w = gray.shape
+            if w > resize_width:
+                new_h = int(h * resize_width / w)
+                gray = cv2.resize(gray, (resize_width, new_h))
+            frames.append(gray)
+        if len(frames) < 2:
+            return None
+        mags: list[float] = []
+        for a, b in zip(frames[:-1], frames[1:]):
+            flow = cv2.calcOpticalFlowFarneback(
+                a, b, None,
+                pyr_scale=0.5, levels=3, winsize=15,
+                iterations=3, poly_n=5, poly_sigma=1.2, flags=0,
+            )
+            mag = np.linalg.norm(flow, axis=2)
+            mags.append(float(mag.mean()))
+        return max(mags) if mags else None
+    except Exception as e:
+        log.debug(f"_compute_camera_motion 失败: {e}")
+        return None
 
 
 def _compute_quality(frame) -> dict:
@@ -309,7 +433,8 @@ def classify_one(src: str, manifest_dir: str,
                  wide_ratio: float             = DEFAULT_WIDE_RATIO,
                  sample_fracs: tuple[float, ...] = DEFAULT_SAMPLE_FRACS,
                  queue: Optional["TaskQueue"]  = None,
-                 quality_thresholds: Optional[dict[str, float]] = None) -> ClassifyResult:
+                 quality_thresholds: Optional[dict[str, float]] = None,
+                 skip_motion_detect: bool = False) -> ClassifyResult:
     """
     对一个 clip 做：
       1. 采多帧，每帧跑人体检测 (yolov8l) + 脸检测 (yolov8n-face) + 画质计算
@@ -378,6 +503,11 @@ def classify_one(src: str, manifest_dir: str,
                 "faces":    f_n, "f_ratios": f_r,
                 "quality":  _compute_quality(frame),
             })
+
+        # 光流抖动检测（cap 释放前；必须在这里做）
+        camera_motion: Optional[float] = None
+        if not skip_motion_detect:
+            camera_motion = _compute_camera_motion(cap, mid_idx=frame_count // 2)
     finally:
         try:
             cap.release()
@@ -459,16 +589,20 @@ def classify_one(src: str, manifest_dir: str,
 
     # 阈值：优先用传入的 dict，缺失项退回模块常量
     th = quality_thresholds or {}
-    th_min_brightness = float(th.get("min_brightness", QUALITY_MIN_BRIGHTNESS))
-    th_max_brightness = float(th.get("max_brightness", QUALITY_MAX_BRIGHTNESS))
-    th_min_contrast   = float(th.get("min_contrast",   QUALITY_MIN_CONTRAST))
-    th_min_sharpness  = float(th.get("min_sharpness",  QUALITY_MIN_SHARPNESS))
+    th_min_brightness   = float(th.get("min_brightness", QUALITY_MIN_BRIGHTNESS))
+    th_max_brightness   = float(th.get("max_brightness", QUALITY_MAX_BRIGHTNESS))
+    th_min_contrast     = float(th.get("min_contrast",   QUALITY_MIN_CONTRAST))
+    th_min_sharpness    = float(th.get("min_sharpness",  QUALITY_MIN_SHARPNESS))
+    th_max_camera_motion = float(th.get("max_camera_motion", QUALITY_MAX_CAMERA_MOTION))
 
     issues: list[str] = []
     if mean_brightness < th_min_brightness:  issues.append("too_dark")
     if mean_brightness > th_max_brightness:  issues.append("too_bright")
     if brightness_std  < th_min_contrast:    issues.append("low_contrast")
     if sharpness       < th_min_sharpness:   issues.append("blurry")
+    if (camera_motion is not None
+            and camera_motion > th_max_camera_motion):
+        issues.append("camera_shake")
     quality_ok = len(issues) == 0
 
     # 置信度：跨帧人/脸计数一致性
@@ -516,6 +650,8 @@ def classify_one(src: str, manifest_dir: str,
             "mean_brightness": round(mean_brightness, 2),
             "brightness_std":  round(brightness_std, 2),
             "sharpness":       round(sharpness, 2),
+            "camera_motion":   (round(camera_motion, 3)
+                                if camera_motion is not None else None),
             "issues":          issues,
         },
     }
@@ -559,7 +695,8 @@ def run_queue(queue, manifest_dir: str, workers: int,
               person_conf: float, face_conf: float,
               single_ratio: float, wide_ratio: float,
               sample_fracs: tuple, stop_ev,
-              quality_thresholds: Optional[dict[str, float]] = None):
+              quality_thresholds: Optional[dict[str, float]] = None,
+              skip_motion_detect: bool = False):
     counts  = {"ok": 0, "err": 0, "landscape": 0, "single": 0,
                "dominant": 0, "multi": 0, "wide": 0}
     current = {}
@@ -606,7 +743,8 @@ def run_queue(queue, manifest_dir: str, workers: int,
                                       person_conf, face_conf,
                                       single_ratio, wide_ratio,
                                       sample_fracs, queue,
-                                      quality_thresholds)
+                                      quality_thresholds,
+                                      skip_motion_detect)
                 except Exception as e:
                     log.error(f"submit 异常 ({e})，释放 claim 后重试")
                     try: queue.mark_failed(src, f"submit error: {e}")
@@ -710,14 +848,20 @@ def main():
     parser.add_argument("--brightness-max", type=float, default=None)
     parser.add_argument("--contrast-min",   type=float, default=None)
     parser.add_argument("--sharpness-min",  type=float, default=None)
+    parser.add_argument("--camera-motion-max", type=float, default=None,
+                        help=f"Farneback 光流平均位移（480-宽灰图）> 该值判 camera_shake；"
+                             f"默认 {QUALITY_MAX_CAMERA_MOTION}")
+    parser.add_argument("--skip-motion-detect", action="store_true",
+                        help="跳过光流抖动检测（省时间，但 manifest 没 camera_motion）")
     args = parser.parse_args()
 
     # ── 解析画质阈值：优先级 CLI flag > YAML > --quality-mode > 严格模式常量
     quality_thresholds: dict[str, float] = {
-        "min_brightness": QUALITY_MIN_BRIGHTNESS,
-        "max_brightness": QUALITY_MAX_BRIGHTNESS,
-        "min_contrast":   QUALITY_MIN_CONTRAST,
-        "min_sharpness":  QUALITY_MIN_SHARPNESS,
+        "min_brightness":    QUALITY_MIN_BRIGHTNESS,
+        "max_brightness":    QUALITY_MAX_BRIGHTNESS,
+        "min_contrast":      QUALITY_MIN_CONTRAST,
+        "min_sharpness":     QUALITY_MIN_SHARPNESS,
+        "max_camera_motion": QUALITY_MAX_CAMERA_MOTION,
     }
     if args.quality_mode == "spec":
         quality_thresholds.update(QUALITY_SPEC_MODE)
@@ -728,17 +872,19 @@ def main():
             if cfg_path.exists():
                 loaded = _yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
                 for k in ("min_brightness", "max_brightness",
-                          "min_contrast", "min_sharpness"):
+                          "min_contrast", "min_sharpness",
+                          "max_camera_motion"):
                     if k in loaded:
                         quality_thresholds[k] = float(loaded[k])
             else:
                 log.warning(f"--quality-config {cfg_path} 不存在，忽略")
         except Exception as e:
             log.warning(f"--quality-config 解析失败 ({e})，使用默认")
-    for cli_key, th_key in (("brightness_min", "min_brightness"),
-                            ("brightness_max", "max_brightness"),
-                            ("contrast_min",   "min_contrast"),
-                            ("sharpness_min",  "min_sharpness")):
+    for cli_key, th_key in (("brightness_min",    "min_brightness"),
+                            ("brightness_max",    "max_brightness"),
+                            ("contrast_min",      "min_contrast"),
+                            ("sharpness_min",     "min_sharpness"),
+                            ("camera_motion_max", "max_camera_motion")):
         v = getattr(args, cli_key)
         if v is not None:
             quality_thresholds[th_key] = float(v)
@@ -802,7 +948,8 @@ def main():
                           args.person_conf, args.face_conf,
                           args.single_face_ratio, args.wide_face_ratio,
                           sample_fracs, stop_ev,
-                          quality_thresholds=quality_thresholds)
+                          quality_thresholds=quality_thresholds,
+                          skip_motion_detect=args.skip_motion_detect)
             console.rule("[bold]分类完成[/bold]")
             console.print(
                 f"  ✅ ok={c['ok']}  ❌ err={c['err']}  |  "
@@ -824,7 +971,8 @@ def main():
                                 args.person_conf, args.face_conf,
                                 args.single_face_ratio, args.wide_face_ratio,
                                 sample_fracs, None,
-                                quality_thresholds): src
+                                quality_thresholds,
+                                args.skip_motion_detect): src
                     for src in clips}
             for fut in concurrent.futures.as_completed(futs):
                 if stop_ev.is_set():

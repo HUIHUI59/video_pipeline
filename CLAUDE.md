@@ -94,6 +94,10 @@ Three Python scripts communicate through a shared file-based task queue:
 Uses conda environment `movietest` on all machines. Install with:
 ```bash
 conda activate movietest
-pip install rich pyyaml
+pip install -r requirements.txt   # rich, pyyaml, ultralytics, opencv, pydantic, mediapipe, fastapi, ...
 sudo apt install -y ffmpeg openssh-server
 ```
+
+**Stage 4 face detector tier**: MediaPipe Tasks `FaceDetector` (blaze_face_full_range, conf≥0.5) is tier-0 and auto-downloads the `.tflite` model to `~/.cache/mediapipe-models/` on first use. Override via `MEDIAPIPE_FACE_MODEL_PATH` env var. Falls back to YOLOv8-face then OpenCV Haar if MediaPipe import fails.
+
+**Stage 4 camera-motion gate**: Farneback dense optical flow on the middle 5 frames (downsampled to 480 wide); avg L2 magnitude > `QUALITY_MAX_CAMERA_MOTION` (default 6.0 px/frame) adds `"camera_shake"` to `quality_metrics.issues`. Skip with `--skip-motion-detect`.

@@ -6,3 +6,10 @@ ultralytics>=8.1
 opencv-python-headless
 # Stage 5 本地侧 schema 校验（pod_runner 里也要，但那个由 tools/pod_setup.sh 装）
 pydantic>=2
+# Stage 4 人脸检测（替代 OpenCV Haar；精度 + confidence 可控）
+mediapipe>=0.10,<0.11
+# Review UI (src/review) — 本地人工审核服务
+fastapi>=0.110
+uvicorn[standard]>=0.29
+httpx>=0.27
+pytest>=8
