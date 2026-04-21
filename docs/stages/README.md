@@ -14,7 +14,7 @@
   *.mkv/mp4/... ──Stage 1──> output/*.mp4 (统一规格)
                  ──Stage 2──> output/clips/<movie>/shot_NNN.mp4
    (可选)        ──Stage 3──> output/clean/<movie>/shot_NNN.mp4  (去硬字幕)
-                 ──Stage 4──> output/manifest/<movie>.jsonl (分类 + 画质)
+                 ──Stage 4──> output/manifest/<movie>.jsonl (分类 + 画质 + 抖动)
    (本地到云)    ──Stage 5──> output/labels/<movie>/<shot_stem>.json (Qwen3-VL 标注)
 ```
 
@@ -49,6 +49,7 @@
 
 **Stage 4 → Stage 5**
 - Stage 4 输出：`<output_dir>/manifest/<movie_stem>.jsonl`（每个 shot 一行 JSON，字段见 [04_shot_classify.md](04_shot_classify.md)）
+- v3 manifest 增加：`num_faces`（MediaPipe FaceDetector, conf≥0.5）、`largest_face_ratio`、`quality_metrics.camera_motion`（Farneback 光流）、`issues` 包含 `camera_shake`
 - Stage 5 输入：同 manifest JSONL；`src/runpod/upload.py` 按 `shot_category` 和 `quality_ok` 过滤，rsync 到 Pod
 
 **Stage 5 输出**

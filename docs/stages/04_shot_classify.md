@@ -2,13 +2,24 @@
 
 ## 作用
 
-对 Stage 2 输出的每个 `shot_*.mp4` 做三件事：
+对 Stage 2 输出的每个 `shot_*.mp4` 做四件事：
 
-1. **检测人和脸**：人体 YOLOv8-Large + 人脸 OpenCV Haar Cascade（跨 5 帧取 max 计数）
+1. **检测人和脸**：人体 YOLOv8-Large + 人脸 **MediaPipe Tasks FaceDetector**（conf≥0.5，
+   full-range；不可用时回落到 YOLOv8-face → OpenCV Haar）。所有检测跨 5 帧取 max。
 2. **分类 shot_category**：`single / dominant / multi / wide / landscape`，按脸框面积比 + 人数判定
 3. **画质评估**：计算亮度、对比度、清晰度，打 `quality_ok` 标记太黑/太亮/低对比/模糊的 clip
+4. **镜头抖动评估**：中央 5 帧 Farneback 密集光流，平均位移 > 阈值打 `camera_shake`（issue）
 
-输出：每部电影一个 JSONL（**prefilter manifest**），每行一个 shot 的分类 + 画质结果。这个 manifest 就是 Stage 5 云端标注的**输入清单**。
+输出：每部电影一个 JSONL（**prefilter manifest**），每行一个 shot 的分类 + 画质 + 抖动结果。
+这个 manifest 就是 Stage 5 云端标注 + `filter_clips.py` 对外交付的**输入清单**。
+
+## 版本历史
+
+- **v3 (2026-04-21)**：MediaPipe 替代 Haar 成为 tier-0 face detector；新增 Farneback 光流
+  `camera_motion` 字段 + `camera_shake` issue；模型文件自动下载到 `~/.cache/mediapipe-models/`。
+- **v2**：加入 `num_faces`、`largest_face_ratio`、`quality_ok`、`quality_metrics`、
+  `largest_subject_bbox`、`largest_subject_vertical_center`。
+- **v1**：初始版本，YOLOv8 人体检测 + 规则分类。
 
 ## 代码入口
 

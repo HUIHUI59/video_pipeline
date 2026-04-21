@@ -30,7 +30,7 @@ video_pipeline/
 │   │   ├── process_videos.py    Stage 1 转码
 │   │   ├── scene_split.py       Stage 2 镜头切分
 │   │   ├── subtitle_remove.py   Stage 3 字幕去除（可选模块，默认不跑）
-│   │   └── shot_classify.py     Stage 4 镜头分类（YOLOv8-person + 规则）
+│   │   └── shot_classify.py     Stage 4 镜头分类（YOLOv8-person + MediaPipe FaceDetector + Farneback 光流抖动检测）
 │   ├── dispatcher/
 │   │   └── distributed_dispatch.py  分布式调度器
 │   └── runpod/              Stage 5 Runpod 云端标注（独立工作流）
@@ -158,12 +158,14 @@ python distributed_dispatch.py \
   --output-dir /mnt/movies/Films/forCloudKorOutput \
   --stage 2
 
-# 只跑 Stage 4 镜头分类（YOLOv8-person + 规则，写 manifest）
+# 只跑 Stage 4 镜头分类（YOLOv8-person + MediaPipe FaceDetector + Farneback 光流抖动）
 python distributed_dispatch.py \
   --input-dir /mnt/movies/Films/forCloudKor \
   --output-dir /mnt/movies/Films/forCloudKorOutput \
   --stage 4
-# 产出：<output>/manifest/<movie>.jsonl，每行一个 shot 的分类结果
+# 产出：<output>/manifest/<movie>.jsonl，每行一个 shot 的分类+画质+抖动结果
+# 字段参考：docs/stages/04_shot_classify.md（含 num_faces、largest_face_ratio、
+# camera_motion 等 v3 字段）
 
 # 只跑 Stage 3 字幕去除（仅当视频有硬字幕时才跑；首次用前先 bash tools/setup_vsr_env.sh）
 python distributed_dispatch.py \
@@ -286,6 +288,41 @@ python -m src.runpod.schemas
 **断点续跑**：Pod 内 `pod_runner.py` 每写完一个 shot 就追加到 `output/.checkpoint.jsonl`，下次重启自动跳过已完成的 shot_id。单个 shot 校验失败时原始模型输出保存在 `output/_failed/<shot_id>.raw.txt` 便于排查。
 
 **停机**：在 Runpod 网页手动 stop Pod（SSH 脚本不负责计费管理）。
+
+---
+
+## 人工审核 UI（Stage 4 / Stage 5 抽检）
+
+本地 FastAPI 单机工具，用来快速浏览 Stage 4 分类结果和 Stage 5 VLM 标签，人工确认或纠正，
+结果追加写到 `<output_root>/reviews/stage{4,5}/<movie>.jsonl`。
+
+**启动**：
+```bash
+pip install -r requirements.txt                # 会装 fastapi uvicorn httpx pytest
+bash scripts/review_server.sh                  # 默认 http://127.0.0.1:8799/
+# 或显式指定
+bash scripts/review_server.sh --output-root /mnt/movies/Films/forCloudKorOutput --port 8799 --reviewer phlee
+```
+
+**界面要点**：
+- 左栏电影列表（显示 manifest / 122B 标签 / 已审核计数）。
+- 顶部 tab 切换 Stage 4（镜头分类）/ Stage 5（VLM 标签）。
+- 右上角切换 中 / 한국어 / EN 三语；偏好持久化到浏览器 localStorage。
+- 键盘：`N`/`P` 切换镜头，`1–5` 纠正分类（Stage 4），`A`/`F`/`R` 给出 accept/needs-fix/reject（Stage 5），`Enter` 提交。
+
+**输出文件**：
+```
+<output_root>/reviews/stage4/<movie>.jsonl     # 每行一个 Stage4Review
+<output_root>/reviews/stage5/<movie>.jsonl     # 每行一个 Stage5Review（按 label_source 区分）
+```
+幂等：文件追加写，读取时按 shot_id（Stage 5 为 `shot_id|label_source`）取最末一条。
+
+**相关文件**：
+- 后端：`src/review/{store.py,api.py,__main__.py}`
+- 前端：`src/review/static/{index.html,app.js,styles.css}`（vanilla JS，无构建步骤）
+- 启动脚本：`scripts/review_server.sh`
+- 设计文档：[docs/superpowers/specs/2026-04-20-review-ui-design.md](superpowers/specs/2026-04-20-review-ui-design.md)
+- 测试：`pytest tests/review/`（44 个用例，覆盖路径安全、幂等合并、Range 流、API 端到端）
 
 ---
 
