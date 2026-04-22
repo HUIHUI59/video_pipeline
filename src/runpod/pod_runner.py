@@ -417,6 +417,17 @@ def main() -> int:
 
     try:
         system_prompt = build_system_prompt(taxonomy_leaves, forbidden_terms)
+        if len(forbidden_terms) > 30:
+            extra = forbidden_terms[30:]
+            system_prompt += (
+                "\n\n=== CAMERA TERMS — FORBIDDEN (EXTENDED LIST) ===\n"
+                "Additional forbidden camera terms (VLM must see ALL "
+                "forbidden terms, not just the first 30): "
+                f"{', '.join(extra)}\n"
+                "These ALSO belong only in shot_context.shot_type, never "
+                "in action_primary / action_quality / body_focus / "
+                "kinematics_hint / captions.\n"
+            )
 
         user_templates: dict[str, str] = {}
         for cat in ("single", "dominant", "multi"):
@@ -817,8 +828,10 @@ def main() -> int:
             "'subtle'/'light'/'heavy'; use true for any visible makeup, "
             "false for none)\n"
             "      distinctive_notes: string\n"
-            "  - observable_blendshape_hints: OBJECT with 15 enum keys, "
-            "NOT a flat string\n"
+            "  - observable_blendshape_hints: OBJECT with 15 enum keys. "
+            "Each value MUST be one of: 'none' | 'slight' | 'medium' | "
+            "'strong' | 'unknown' (5 classes, qualitative only — no "
+            "numeric scales, no free text). NOT a flat string.\n"
             "  - temporal_change enum: static|building|peak_then_release|"
             "transition|rapid_micro\n"
             "  - expression_confidence: number [0,1]\n\n"
