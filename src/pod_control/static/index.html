@@ -32,7 +32,17 @@
 
       <div class="prepare-layout">
         <aside class="prepare-side">
-          <h2>Movies</h2>
+          <div class="side-header">
+            <h2>Movies</h2>
+            <div class="side-actions">
+              <button class="inline-btn" id="movies-select-all" type="button">All</button>
+              <button class="inline-btn" id="movies-clear" type="button">Clear</button>
+            </div>
+          </div>
+          <div class="movie-filter">
+            <input type="search" id="movie-search" placeholder="filter movies…" />
+            <span id="movies-count" class="muted"></span>
+          </div>
           <ul id="movie-list" class="list"></ul>
 
           <h2>Saved batches</h2>

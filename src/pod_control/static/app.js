@@ -111,41 +111,108 @@ function currentFilterParams() {
   };
 }
 
+// Full movie list (cached) so filter/search + select-all work without refetch.
+let _moviesCache = [];
+
+function renderMovieList() {
+  const ul = $("#movie-list");
+  const q = ($("#movie-search").value || "").trim().toLowerCase();
+  ul.innerHTML = "";
+  const visible = _moviesCache.filter(
+    (m) => !q || m.movie.toLowerCase().includes(q)
+  );
+  if (!visible.length) {
+    ul.innerHTML = `<li class="muted">${
+      _moviesCache.length ? "no match" : "no manifests found"
+    }</li>`;
+  }
+  for (const m of visible) {
+    const li = document.createElement("li");
+    li.dataset.movie = m.movie;
+    const isChecked = state.selectedMovies.has(m.movie);
+    if (isChecked) li.classList.add("active");
+    li.innerHTML = `
+      <label>
+        <input type="checkbox" class="movie-cb" value="${m.movie}"${isChecked ? " checked" : ""} />
+        <span class="movie-name">${m.movie}</span>
+      </label>
+      <span class="count">${m.total_shots} · ok=${m.quality_ok_count}</span>`;
+    li.querySelector(".movie-cb").addEventListener("change", (e) => {
+      e.stopPropagation();
+      toggleMovie(m.movie, e.target.checked);
+    });
+    li.addEventListener("click", (e) => {
+      // If the click already landed on the checkbox/label, browser will
+      // toggle it and fire change — don't double-handle.
+      if (e.target.tagName === "INPUT"
+          || e.target.tagName === "LABEL"
+          || e.target.classList.contains("movie-name")) return;
+      const cb = li.querySelector(".movie-cb");
+      cb.checked = !cb.checked;
+      toggleMovie(m.movie, cb.checked);
+    });
+    ul.appendChild(li);
+  }
+  updateMoviesCount();
+}
+
+function updateMoviesCount() {
+  const selected = state.selectedMovies.size;
+  const total = _moviesCache.length;
+  $("#movies-count").textContent =
+    selected > 0 ? `${selected}/${total} selected` : `${total} total`;
+}
+
 async function loadMovies() {
   const ul = $("#movie-list");
   ul.innerHTML = `<li class="muted">loading…</li>`;
   try {
     const { movies } = await jsonOrThrow(await fetch("/api/movies"));
-    ul.innerHTML = "";
-    if (!movies.length) {
-      ul.innerHTML = `<li class="muted">no manifests found</li>`;
-      return;
+    _moviesCache = movies;
+    // Drop any selected movies that no longer exist (e.g. output root changed).
+    const known = new Set(movies.map((m) => m.movie));
+    for (const m of [...state.selectedMovies]) {
+      if (!known.has(m)) state.selectedMovies.delete(m);
     }
-    for (const m of movies) {
-      const li = document.createElement("li");
-      li.dataset.movie = m.movie;
-      li.innerHTML = `
-        <label>
-          <input type="checkbox" class="movie-cb" value="${m.movie}" />
-          ${m.movie}
-        </label>
-        <span class="count">${m.total_shots} · ok=${m.quality_ok_count}</span>`;
-      li.querySelector(".movie-cb").addEventListener("change", (e) => {
-        e.stopPropagation();
-        toggleMovie(m.movie, e.target.checked);
-      });
-      // Clicking the row (outside the checkbox) also toggles — convenience.
-      li.addEventListener("click", (e) => {
-        if (e.target.tagName === "INPUT" || e.target.tagName === "LABEL") return;
-        const cb = li.querySelector(".movie-cb");
-        cb.checked = !cb.checked;
-        toggleMovie(m.movie, cb.checked);
-      });
-      ul.appendChild(li);
-    }
+    renderMovieList();
   } catch (err) {
     ul.innerHTML = `<li class="muted">${err.message}</li>`;
   }
+}
+
+$("#movie-search").addEventListener("input", renderMovieList);
+
+$("#movies-select-all").addEventListener("click", () => {
+  // Respect the current search filter — only select what's visible.
+  const q = ($("#movie-search").value || "").trim().toLowerCase();
+  for (const m of _moviesCache) {
+    if (!q || m.movie.toLowerCase().includes(q)) {
+      state.selectedMovies.add(m.movie);
+    }
+  }
+  _afterBulkSelectionChange();
+});
+
+$("#movies-clear").addEventListener("click", () => {
+  state.selectedMovies.clear();
+  _afterBulkSelectionChange();
+});
+
+function _afterBulkSelectionChange() {
+  state.page = 1;
+  renderMovieList();
+  const count = state.selectedMovies.size;
+  if (count === 0) {
+    $("#empty-hint").hidden = false;
+    $("#filter-panel").hidden = true;
+    return;
+  }
+  $("#empty-hint").hidden = true;
+  $("#filter-panel").hidden = false;
+  $("#current-movie").textContent = count === 1
+    ? [...state.selectedMovies][0]
+    : `${count} movies`;
+  applyFilter();
 }
 
 async function loadBatches() {
@@ -193,6 +260,7 @@ function toggleMovie(movie, selected) {
   $$("#movie-list li").forEach((li) =>
     li.classList.toggle("active", state.selectedMovies.has(li.dataset.movie))
   );
+  updateMoviesCount();
   const count = state.selectedMovies.size;
   if (count === 0) {
     $("#empty-hint").hidden = false;
@@ -219,6 +287,10 @@ async function fetchPreview(extraParams = {}) {
   return jsonOrThrow(
     await fetch(`/api/movies/${encodeURIComponent(first)}/preview?${params}`)
   );
+}
+
+function _hasSelection() {
+  return state.selectedMovies.size > 0;
 }
 
 function renderPreview(result) {
@@ -248,7 +320,7 @@ function renderPreview(result) {
 }
 
 async function applyFilter() {
-  if (!state.currentMovie) return;
+  if (!_hasSelection()) return;
   try {
     renderPreview(await fetchPreview());
   } catch (err) {
@@ -257,7 +329,7 @@ async function applyFilter() {
 }
 
 async function randomSample() {
-  if (!state.currentMovie) return;
+  if (!_hasSelection()) return;
   try {
     const seed = Math.floor(Math.random() * 2 ** 31);
     renderPreview(await fetchPreview({ sample_seed: seed, page_size: 10 }));

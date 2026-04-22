@@ -380,6 +380,34 @@ label {
 }
 .prepare-side h2:first-child { margin-top: 0; }
 
+.side-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 8px;
+}
+.side-header h2 { margin: 0; }
+
+.side-actions {
+  display: flex;
+  gap: 6px;
+}
+.side-actions .inline-btn {
+  padding: 2px 8px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.movie-filter {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.movie-filter input { flex: 1; font-size: 12px; padding: 5px 8px; }
+.movie-filter span  { white-space: nowrap; }
+
 /* ── Filter form ──────────────────────────────────────────── */
 
 .filter-form {
