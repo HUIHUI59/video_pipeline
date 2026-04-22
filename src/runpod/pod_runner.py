@@ -822,8 +822,10 @@ def main() -> int:
             "  - temporal_change enum: static|building|peak_then_release|"
             "transition|rapid_micro\n"
             "  - expression_confidence: number [0,1]\n\n"
-            "COMPACT JSON, no pretty-print. expression_caption <60 words, "
-            "each alt_caption <40 words."
+            "COMPACT JSON, no pretty-print. expression_caption 50-120 "
+            "words (delivery_v1 spec). alternative_captions per-key "
+            "ranges: direct 20-40, literary 30-60, direction 30-50, "
+            "situational 30-60 (same spec as body)."
         )
         if face_crop_parts:
             r2_user_text += (
@@ -969,9 +971,10 @@ def main() -> int:
                 "triggers a validator warning). BODY only, no face\n"
                 "  - alternative_captions: OBJECT with 4 keys (direct, "
                 "literary, direction, situational), NOT a list. "
-                "MIN WORD COUNTS PER KEY: direct ≥ 20 words; literary, "
-                "direction, situational each ≥ 30 words. Be descriptive, "
-                "not terse.\n"
+                "WORD RANGES (delivery_v1 validate_body_analysis "
+                "CAPTION_RANGES): direct 20-40, literary 30-60, "
+                "direction 30-50, situational 30-60. Be descriptive, "
+                "not terse; stay within each range.\n"
                 "  - action_primary: taxonomy leaf (walking, sitting, etc.)\n"
                 "  - action_quality: OBJECT {intensity, tone, tempo}, "
                 "NOT a string. STRICT VALUES:\n"
@@ -1030,10 +1033,10 @@ def main() -> int:
                 "Output ONLY the body_analysis dict, no wrapping. COMPACT "
                 "JSON. Word budget per field (validator enforces these):\n"
                 "  - motion_caption: 50-180 words (body motion detail)\n"
-                "  - alternative_captions.direct: 20-60 words\n"
-                "  - alternative_captions.literary: 30-80 words\n"
-                "  - alternative_captions.direction: 30-80 words\n"
-                "  - alternative_captions.situational: 30-80 words"
+                "  - alternative_captions.direct: 20-40 words\n"
+                "  - alternative_captions.literary: 30-60 words\n"
+                "  - alternative_captions.direction: 30-50 words\n"
+                "  - alternative_captions.situational: 30-60 words"
             )
             messages_r1 = [
                 {"role": "system", "content": system_prompt},
