@@ -17,7 +17,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 
 from . import filter as pcfilter
-from .store import Batch, FilterParams, Store, StoreError
+from . import ssh as pcssh
+from .store import Batch, FilterParams, PodProfile, Store, StoreError
 
 
 _CLIP_CHUNK = 1 << 20  # 1 MiB
@@ -34,6 +35,24 @@ class SaveBatchRequest(BaseModel):
         if not v or not all(c.isalnum() or c in "-_" for c in v):
             raise ValueError(
                 f"batch name must be alnum / - / _ only, got {v!r}"
+            )
+        return v
+
+
+class PodUpsertRequest(BaseModel):
+    name: str
+    host: str
+    user: str
+    ssh_key: str
+    port: int = 22
+    workspace: str
+
+    @field_validator("name")
+    @classmethod
+    def _slug_only(cls, v: str) -> str:
+        if not v or not all(c.isalnum() or c in "-_" for c in v):
+            raise ValueError(
+                f"pod name must be alnum / - / _ only, got {v!r}"
             )
         return v
 
@@ -178,6 +197,71 @@ def create_app(
             status = 404 if code == "batch_not_found" else 409
             raise _err(code, str(ex), status=status)
         return Response(status_code=204)
+
+    # ── M4 Pods ---------------------------------------------------------
+
+    @app.get("/api/pods")
+    def list_pods() -> dict:
+        return {"pods": [p.model_dump() for p in store.list_pods()]}
+
+    @app.get("/api/pods/{name}")
+    def get_pod(name: str) -> dict:
+        p = store.get_pod(name)
+        if p is None:
+            raise _err("pod_not_found", f"pod {name!r} not found", status=404)
+        return p.model_dump()
+
+    @app.post("/api/pods", status_code=201)
+    def create_pod(req: PodUpsertRequest) -> dict:
+        if store.get_pod(req.name) is not None:
+            raise _err("pod_exists", f"pod {req.name!r} already exists",
+                       status=409)
+        pod = PodProfile(**req.model_dump())
+        store.upsert_pod(pod)
+        return pod.model_dump()
+
+    @app.put("/api/pods/{name}")
+    def update_pod(name: str, req: PodUpsertRequest) -> dict:
+        if req.name != name:
+            raise _err("name_mismatch",
+                       f"URL name {name!r} != body name {req.name!r}")
+        existing = store.get_pod(name)
+        if existing is None:
+            raise _err("pod_not_found", f"pod {name!r} not found", status=404)
+        pod = PodProfile(
+            **req.model_dump(),
+            last_test_ok=existing.last_test_ok,
+            last_test_at=existing.last_test_at,
+        )
+        store.upsert_pod(pod)
+        return pod.model_dump()
+
+    @app.delete("/api/pods/{name}", status_code=204)
+    def delete_pod(name: str) -> Response:
+        try:
+            store.delete_pod(name)
+        except StoreError as ex:
+            raise _err("pod_not_found", str(ex), status=404)
+        return Response(status_code=204)
+
+    @app.post("/api/pods/{name}/test")
+    def test_pod(name: str) -> dict:
+        pod = store.get_pod(name)
+        if pod is None:
+            raise _err("pod_not_found", f"pod {name!r} not found", status=404)
+        result = pcssh.test_connect(pod)
+        # Persist last-test stamp.
+        import time as _time
+        updated = pod.model_copy(update={
+            "last_test_ok": result.ok,
+            "last_test_at": _time.time(),
+        })
+        store.upsert_pod(updated)
+        return {
+            "ok": result.ok,
+            "latency_ms": result.latency_ms,
+            "message": result.message,
+        }
 
     # ── clip streaming (Range-supporting, for preview) ------------------
 

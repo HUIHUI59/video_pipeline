@@ -76,7 +76,32 @@
       </div>
     </section>
     <section id="tab-pods" class="tab">
-      <p class="placeholder">Pods — M4 里实现 (SSH profiles + test connect)</p>
+      <div class="pods-layout">
+        <aside class="prepare-side">
+          <h2>SSH profiles</h2>
+          <ul id="pods-list" class="list"></ul>
+          <button id="new-pod-btn" class="inline-btn">+ New profile</button>
+        </aside>
+        <div class="prepare-main">
+          <section class="panel" id="pod-form-panel">
+            <h2 id="pod-form-title">New pod profile</h2>
+            <form id="pod-form" class="pod-form">
+              <label>name <input name="name" required /></label>
+              <label>host <input name="host" required /></label>
+              <label>user <input name="user" required /></label>
+              <label>port <input name="port" type="number" min="1" value="22" /></label>
+              <label>ssh_key <input name="ssh_key" placeholder="~/.ssh/id_ed25519" required /></label>
+              <label>workspace <input name="workspace" placeholder="/workspace/video_pipeline" required /></label>
+              <div class="pod-form-actions">
+                <button type="submit" id="pod-save-btn">Save</button>
+                <button type="button" id="pod-test-btn" disabled>Test connect</button>
+                <button type="button" id="pod-delete-btn" disabled>Delete</button>
+                <span id="pod-form-msg" class="muted"></span>
+              </div>
+            </form>
+          </section>
+        </div>
+      </div>
     </section>
     <section id="tab-run" class="tab">
       <p class="placeholder">Run — M5 里实现 (launcher + kill button)</p>

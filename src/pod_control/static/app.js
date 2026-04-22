@@ -255,9 +255,152 @@ $("#save-batch-form").addEventListener("submit", async (e) => {
   }
 });
 
+// ── Pods tab state ───────────────────────────────────────────────
+
+const podsState = {
+  currentPod: null,   // null = creating new; object = editing existing
+};
+
+function dotClass(ok) {
+  if (ok === true) return "test-dot ok";
+  if (ok === false) return "test-dot err";
+  return "test-dot";
+}
+
+async function loadPods() {
+  const ul = $("#pods-list");
+  ul.innerHTML = `<li class="muted">loading…</li>`;
+  try {
+    const { pods } = await jsonOrThrow(await fetch("/api/pods"));
+    ul.innerHTML = "";
+    if (!pods.length) {
+      ul.innerHTML = `<li class="muted">no profiles yet</li>`;
+      return;
+    }
+    for (const p of pods) {
+      const li = document.createElement("li");
+      li.dataset.pod = p.name;
+      li.innerHTML = `
+        <span><span class="${dotClass(p.last_test_ok)}"></span>${p.name}</span>
+        <span class="count">${p.user}@${p.host}</span>`;
+      li.addEventListener("click", () => selectPod(p));
+      ul.appendChild(li);
+    }
+  } catch (err) {
+    ul.innerHTML = `<li class="muted">${err.message}</li>`;
+  }
+}
+
+function populatePodForm(pod) {
+  const f = $("#pod-form");
+  for (const key of ["name", "host", "user", "port", "ssh_key", "workspace"]) {
+    f.elements[key].value = pod ? pod[key] ?? "" : "";
+  }
+  if (pod) {
+    f.elements.name.setAttribute("readonly", "readonly");
+  } else {
+    f.elements.name.removeAttribute("readonly");
+    f.elements.port.value = 22;
+  }
+}
+
+function selectPod(pod) {
+  podsState.currentPod = pod;
+  $$("#pods-list li").forEach((li) =>
+    li.classList.toggle("active", li.dataset.pod === pod.name)
+  );
+  $("#pod-form-title").textContent = `Edit · ${pod.name}`;
+  populatePodForm(pod);
+  $("#pod-test-btn").disabled = false;
+  $("#pod-delete-btn").disabled = false;
+  $("#pod-form-msg").textContent = "";
+}
+
+function resetPodForm() {
+  podsState.currentPod = null;
+  $$("#pods-list li").forEach((li) => li.classList.remove("active"));
+  $("#pod-form-title").textContent = "New pod profile";
+  populatePodForm(null);
+  $("#pod-test-btn").disabled = true;
+  $("#pod-delete-btn").disabled = true;
+  $("#pod-form-msg").textContent = "";
+}
+
+$("#new-pod-btn").addEventListener("click", resetPodForm);
+
+$("#pod-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const msg = $("#pod-form-msg");
+  msg.textContent = "saving…";
+  const f = e.currentTarget;
+  const payload = {
+    name: f.elements.name.value.trim(),
+    host: f.elements.host.value.trim(),
+    user: f.elements.user.value.trim(),
+    port: parseInt(f.elements.port.value, 10) || 22,
+    ssh_key: f.elements.ssh_key.value.trim(),
+    workspace: f.elements.workspace.value.trim(),
+  };
+  const editing = podsState.currentPod != null;
+  const url = editing
+    ? `/api/pods/${encodeURIComponent(payload.name)}`
+    : "/api/pods";
+  const method = editing ? "PUT" : "POST";
+  try {
+    const r = await fetch(url, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await jsonOrThrow(r);
+    msg.textContent = editing ? "updated" : "saved";
+    await loadPods();
+    selectPod(data);
+  } catch (err) {
+    msg.textContent = err.message;
+  }
+});
+
+$("#pod-test-btn").addEventListener("click", async () => {
+  if (!podsState.currentPod) return;
+  const msg = $("#pod-form-msg");
+  msg.textContent = "testing…";
+  try {
+    const r = await fetch(
+      `/api/pods/${encodeURIComponent(podsState.currentPod.name)}/test`,
+      { method: "POST" }
+    );
+    const data = await jsonOrThrow(r);
+    msg.textContent = data.ok
+      ? `ok · ${data.latency_ms}ms`
+      : `fail · ${data.message}`;
+    await loadPods();
+  } catch (err) {
+    msg.textContent = err.message;
+  }
+});
+
+$("#pod-delete-btn").addEventListener("click", async () => {
+  if (!podsState.currentPod) return;
+  if (!confirm(`delete ${podsState.currentPod.name}?`)) return;
+  try {
+    const r = await fetch(
+      `/api/pods/${encodeURIComponent(podsState.currentPod.name)}`,
+      { method: "DELETE" }
+    );
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    await loadPods();
+    resetPodForm();
+  } catch (err) {
+    $("#pod-form-msg").textContent = err.message;
+  }
+});
+
 // ── Bootstrap --------------------------------------------------------
 
 renderCategoryChecks();
+resetPodForm();
 pingHealth();
 loadMovies();
 loadBatches();
+loadPods();

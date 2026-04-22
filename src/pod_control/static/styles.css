@@ -261,6 +261,81 @@ main {
   cursor: pointer;
 }
 
+.pods-layout {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  gap: 20px;
+  align-items: start;
+}
+
+.inline-btn {
+  background: transparent;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  padding: 6px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  margin-top: 4px;
+}
+.inline-btn:hover { background: rgba(76, 141, 255, 0.12); }
+
+.pod-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pod-form label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.pod-form input {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 6px 10px;
+  border-radius: 4px;
+  max-width: 420px;
+}
+
+.pod-form-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.pod-form-actions button {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border: none;
+  padding: 6px 14px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.pod-form-actions button[disabled] { opacity: 0.45; cursor: not-allowed; }
+#pod-test-btn { background: var(--ok); }
+#pod-delete-btn { background: var(--err); }
+
+.test-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.test-dot.ok { background: var(--ok); }
+.test-dot.err { background: var(--err); }
+
 footer {
   position: fixed;
   bottom: 0;
