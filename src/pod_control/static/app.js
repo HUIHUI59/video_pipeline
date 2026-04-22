@@ -63,11 +63,16 @@ function renderCategoryChecks() {
   host.innerHTML = "";
   for (const cat of CATEGORY_CHOICES) {
     const id = `cat-${cat}`;
-    const wrap = document.createElement("label");
-    wrap.innerHTML = `<input type="checkbox" id="${id}" value="${cat}" ${
-      CATEGORY_DEFAULTS.includes(cat) ? "checked" : ""
-    } /> ${cat}`;
-    host.appendChild(wrap);
+    const label = document.createElement("label");
+    label.className = "chip";
+    const checked = CATEGORY_DEFAULTS.includes(cat);
+    if (checked) label.classList.add("on");
+    label.innerHTML =
+      `<input type="checkbox" id="${id}" value="${cat}" ${checked ? "checked" : ""} /> ${cat}`;
+    label.querySelector("input").addEventListener("change", (e) => {
+      label.classList.toggle("on", e.target.checked);
+    });
+    host.appendChild(label);
   }
 }
 
@@ -250,6 +255,67 @@ $("#save-batch-form").addEventListener("submit", async (e) => {
     msg.textContent = `saved · ${data.shot_count} shots`;
     $("#batch-name").value = "";
     await loadBatches();
+  } catch (err) {
+    msg.textContent = err.message;
+  }
+});
+
+// ── Direct launch (Prepare) ─────────────────────────────────────
+
+async function populateDirectPodSel() {
+  try {
+    const { pods } = await jsonOrThrow(await fetch("/api/pods"));
+    const sel = $("#direct-pod-sel");
+    if (!pods.length) {
+      sel.innerHTML = `<option value="">no pods — add one in Pods tab</option>`;
+      sel.disabled = true;
+      $("#direct-launch-btn").disabled = true;
+      return;
+    }
+    sel.innerHTML = pods
+      .map((p) => `<option value="${p.name}">${p.name} (${p.user}@${p.host})</option>`)
+      .join("");
+    sel.disabled = false;
+    $("#direct-launch-btn").disabled = false;
+  } catch (err) {
+    $("#direct-launch-msg").textContent = err.message;
+  }
+}
+
+$("#direct-launch-btn").addEventListener("click", async () => {
+  const msg = $("#direct-launch-msg");
+  if (!state.currentMovie) {
+    msg.textContent = "pick a movie first";
+    return;
+  }
+  const podName = $("#direct-pod-sel").value;
+  if (!podName) {
+    msg.textContent = "pick a pod first";
+    return;
+  }
+  if (!confirm(`launch inference on movie "${state.currentMovie}" using pod "${podName}"?`)) {
+    return;
+  }
+  msg.textContent = "launching…";
+  try {
+    const r = await fetch("/api/runs/quick", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        movie: state.currentMovie,
+        pod_name: podName,
+        preset_path: $("#direct-preset").value.trim() || null,
+        filter_params: currentFilterParams(),
+      }),
+    });
+    const data = await jsonOrThrow(r);
+    msg.textContent = `launched run ${data.id} — switching to Monitor…`;
+    await loadBatches();
+    await populateRunSelectors();
+    await refreshRuns();
+    // Auto-hop to Monitor tab so the user sees the log immediately.
+    switchTab("monitor");
+    await monitorInit();
   } catch (err) {
     msg.textContent = err.message;
   }
@@ -529,6 +595,13 @@ document
     startRunPolling();
   });
 
+// Refresh the direct-launch pod dropdown whenever user re-enters Prepare.
+document
+  .querySelector('nav button[data-tab="prepare"]')
+  .addEventListener("click", () => {
+    populateDirectPodSel();
+  });
+
 // ── Monitor tab state ───────────────────────────────────────────────
 
 const monitorState = {
@@ -684,5 +757,6 @@ loadOutputRoot();
 loadMovies();
 loadBatches();
 loadPods();
+populateDirectPodSel();
 populateRunSelectors();
 refreshRuns();

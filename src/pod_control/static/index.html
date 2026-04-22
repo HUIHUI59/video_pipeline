@@ -42,46 +42,58 @@
         <div class="prepare-main">
           <section class="panel" id="filter-panel" hidden>
             <h2>Filter · <span id="current-movie"></span></h2>
+
             <div class="filter-form">
-              <label>
-                categories:
+              <div class="field">
+                <label>categories</label>
                 <span id="category-checks"></span>
-              </label>
-              <label>
-                <input type="checkbox" id="skip-bad-quality" checked />
-                skip_bad_quality
-              </label>
-              <label>
-                <input type="checkbox" id="skip-landscape" checked />
-                skip_landscape
-              </label>
-              <label>
-                max_shots:
-                <input type="number" id="max-shots" min="1" placeholder="null" />
-              </label>
-              <button id="apply-filter">Apply</button>
-              <button id="random-sample">Random sample 10</button>
+              </div>
+              <div class="field">
+                <label>quality / landscape</label>
+                <div class="check-row">
+                  <label><input type="checkbox" id="skip-bad-quality" checked /> skip_bad_quality</label>
+                  <label><input type="checkbox" id="skip-landscape" checked /> skip_landscape</label>
+                </div>
+              </div>
+              <div class="field">
+                <label>max_shots</label>
+                <input type="number" id="max-shots" min="1" placeholder="null (all)" />
+              </div>
+              <button class="btn-primary" id="apply-filter">Apply</button>
+              <button class="btn-secondary" id="random-sample">Random sample 10</button>
               <span id="match-count" class="muted"></span>
             </div>
 
             <div class="preview-grid" id="preview-grid"></div>
 
             <div class="pager">
-              <button id="page-prev">Prev</button>
-              <span id="page-info"></span>
-              <button id="page-next">Next</button>
+              <button id="page-prev">← Prev</button>
+              <span id="page-info" class="muted"></span>
+              <button id="page-next">Next →</button>
             </div>
 
-            <form id="save-batch-form" class="save-batch">
-              <input type="text" id="batch-name"
-                     placeholder="batch name (slug)" required />
-              <button type="submit">Save batch</button>
-              <span id="save-batch-msg" class="muted"></span>
-            </form>
+            <div class="prepare-actions">
+              <form id="save-batch-form" class="action-group save-batch">
+                <span class="label-hint">Save batch</span>
+                <input type="text" id="batch-name"
+                       placeholder="batch name (slug)" required />
+                <button type="submit" class="btn-success">Save</button>
+                <span id="save-batch-msg" class="muted"></span>
+              </form>
+
+              <div class="action-group" id="direct-launch">
+                <span class="label-hint">Launch directly</span>
+                <select id="direct-pod-sel"></select>
+                <input type="text" id="direct-preset"
+                       placeholder="preset yaml path (optional)" />
+                <button class="btn-primary" id="direct-launch-btn">Run now</button>
+                <span id="direct-launch-msg" class="muted"></span>
+              </div>
+            </div>
           </section>
 
           <section class="panel" id="empty-hint">
-            <p class="placeholder">左侧选一个 movie 开始准备 batch。</p>
+            <p class="placeholder">Pick a movie from the left sidebar to start filtering.</p>
           </section>
         </div>
       </div>

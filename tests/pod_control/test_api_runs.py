@@ -94,3 +94,22 @@ def test_history_endpoint_returns_lists(client):
     assert "history" in body
     assert body["active"] == []
     assert body["history"] == []
+
+
+def test_quick_launch_requires_movie_found(client):
+    c, _, _, _ = client
+    _mk_pod(c)
+    r = c.post("/api/runs/quick", json={
+        "movie": "ghost_film", "pod_name": "h100",
+    })
+    assert r.status_code == 404
+    assert r.json()["detail"]["error"]["code"] == "movie_not_found"
+
+
+def test_quick_launch_requires_pod_found(client):
+    c, _, _, _ = client
+    r = c.post("/api/runs/quick", json={
+        "movie": "M1", "pod_name": "ghost",
+    })
+    assert r.status_code == 404
+    assert r.json()["detail"]["error"]["code"] == "pod_not_found"

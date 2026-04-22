@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import mimetypes
 import os
+import time
 from pathlib import Path
 from typing import Iterator
 
@@ -43,6 +44,13 @@ class SaveBatchRequest(BaseModel):
 class LaunchRunRequest(BaseModel):
     batch_name: str
     pod_name: str
+    preset_path: str | None = None
+
+
+class QuickLaunchRequest(BaseModel):
+    movie: str
+    pod_name: str
+    filter_params: FilterParams = FilterParams()
     preset_path: str | None = None
 
 
@@ -340,10 +348,9 @@ def create_app(
             raise _err("pod_not_found", f"pod {name!r} not found", status=404)
         result = pcssh.test_connect(pod)
         # Persist last-test stamp.
-        import time as _time
         updated = pod.model_copy(update={
             "last_test_ok": result.ok,
-            "last_test_at": _time.time(),
+            "last_test_at": time.time(),
         })
         store.upsert_pod(updated)
         return {
@@ -376,6 +383,67 @@ def create_app(
                     else "runner_error")
             raise _err(code, str(ex), status=409 if code == "run_already_active" else 500)
         # Flip batch to running (atomic overwrite).
+        batch.status = "running"
+        batch.last_run_id = rec.id
+        store.save_batch(batch, overwrite=True)
+        return rec.model_dump()
+
+    @app.post("/api/runs/quick", status_code=201)
+    def quick_launch(req: QuickLaunchRequest) -> dict:
+        """Ad-hoc launch: auto-create a throwaway batch, then launch.
+
+        Batch name is <movie_slug>_<YYYYmmddHHMMSS>. If the movie has a
+        space/punctuation we lowercase + slugify aggressively. The batch
+        file still lives on disk so it can be reviewed + re-run after
+        the run ends, but the user didn't have to pre-save it.
+        """
+        out = _require_output_root()
+        try:
+            matched = pcfilter.filter_movie(out, req.movie, req.filter_params)
+        except Exception as ex:
+            raise _err("invalid_filter", str(ex))
+        if not matched and not pcfilter.manifest_dir(out).joinpath(
+            f"{req.movie}.jsonl"
+        ).exists():
+            raise _err("movie_not_found",
+                       f"no manifest for {req.movie!r}", status=404)
+        pod = store.get_pod(req.pod_name)
+        if pod is None:
+            raise _err("pod_not_found",
+                       f"pod {req.pod_name!r} not found", status=404)
+
+        # Auto-name: movie → alnum/dash slug, truncated.
+        slug = "".join(
+            c if c.isalnum() or c in "-_" else "_" for c in req.movie
+        )[:40] or "batch"
+        stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime())
+        name = f"{slug}_{stamp}"
+
+        batch = Batch(
+            name=name,
+            movie=req.movie,
+            filter_params=req.filter_params,
+            shot_count=len(matched),
+        )
+        try:
+            store.save_batch(batch)
+        except StoreError as ex:
+            raise _err("batch_exists", str(ex), status=409)
+
+        try:
+            rec = runner.launch(batch, pod, preset_path=req.preset_path)
+        except RunnerError as ex:
+            # Roll back the auto-created batch so the user isn't left
+            # with a phantom "ready" batch pointing at nothing.
+            try:
+                store.delete_batch(name)
+            except Exception:
+                pass
+            code = ("run_already_active"
+                    if "run_already_active" in str(ex)
+                    else "runner_error")
+            raise _err(code, str(ex),
+                       status=409 if code == "run_already_active" else 500)
         batch.status = "running"
         batch.last_run_id = rec.id
         store.save_batch(batch, overwrite=True)
