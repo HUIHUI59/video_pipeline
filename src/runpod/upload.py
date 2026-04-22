@@ -79,6 +79,15 @@ def _ssh_opts(pod: dict[str, Any]) -> list[str]:
 def _iter_manifest_lines(manifest_dir: str,
                          movies_filter: set[str] | None
                          ) -> Iterable[tuple[str, ManifestEntry]]:
+    """Yield (movie_name, ManifestEntry) pairs from Stage 4 *.jsonl files.
+
+    Scope: validates INPUT manifests only (shot_id, clip path, stage-4
+    metadata). Does NOT validate delivery_v1 ShotLabel — those are
+    pod-side outputs. The full ShotLabel validation pipeline runs on the
+    pod (pod_runner.parse_and_validate: post_normalize.fix_all →
+    ShotLabel.model_validate → spec ShotValidator.validate) and is
+    re-checked locally by download.py._validate_all after rsync.
+    """
     for p in sorted(Path(manifest_dir).glob("*.jsonl")):
         movie = p.stem
         if movies_filter and movie not in movies_filter:
