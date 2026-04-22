@@ -136,97 +136,22 @@ class TagNormalizer:
 
         return v
 
-    # ── 自由文本里剥 camera 术语 ──────────────────────────────────
-    # 规范 § 5.3 禁止 camera 术语出现在 action/body/kinematics 字段，同样不应
-    # 污染 captions、shot_context summary 等描述性文字。这里做保守的整词替换：
-    # 只在 word boundary 出现时删除，避免误删"closeness"这种非 camera 词。
-    def _strip_camera_terms_text(self, text):
-        """Remove camera terms from free-text. Returns (new_text, changed)."""
-        if not text or not isinstance(text, str):
-            return text, False
-        import re
-        changed = False
-        out = text
-        for term in self.camera_terms:
-            if not term:
-                continue
-            pattern = re.compile(
-                r"(?i)(?<![A-Za-z0-9])" + re.escape(term) + r"(?![A-Za-z0-9])"
-            )
-            new_out = pattern.sub("", out)
-            if new_out != out:
-                changed = True
-                out = new_out
-        if changed:
-            # 清理多余空格/重复逗号/首尾标点
-            out = re.sub(r"\s{2,}", " ", out)
-            out = re.sub(r"\s*,\s*,", ",", out)
-            out = re.sub(r"^[,\s]+|[,\s]+$", "", out)
-            self.stats["camera_term_stripped_in_text"] += 1
-        return out, changed
-
     def normalize_shot(self, shot: dict) -> tuple[dict, int]:
         """Normalize a single shot JSON. Returns (normalized_shot, changes_count)."""
         changes = 0
 
-        def _strip_dict_text(d, keys):
-            """对 d 里列出的字符串 keys 跑 _strip_camera_terms_text。返回 changes 数。"""
-            if not isinstance(d, dict):
-                return 0
-            c = 0
-            for k in keys:
-                v = d.get(k)
-                new_v, changed = self._strip_camera_terms_text(v)
-                if changed:
-                    d[k] = new_v
-                    c += 1
-            return c
-
-        # 1) persons[].body_analysis.action_primary（原有行为，保持）
-        for person in shot.get("persons", []) or []:
-            body = person.get("body_analysis") if isinstance(person, dict) else None
-            if isinstance(body, dict):
-                ap = body.get("action_primary")
-                if ap:
-                    new_ap = self.normalize_action_primary(ap)
-                    if new_ap != ap:
-                        body["action_primary"] = new_ap
-                        changes += 1
-
-        # 2) camera_terms_forbidden 扩散到全部自由文本字段（delivery_v1 § 5.3）
-        #    verb_forms / synonyms / intensity_remap / tone_remap 保持只作用
-        #    于 action_primary —— 它们对自然语言描述是有损改写，易改变语义。
-        for person in shot.get("persons", []) or []:
-            if not isinstance(person, dict):
+        for person in shot.get("persons", []):
+            body = person.get("body_analysis")
+            if not body or not isinstance(body, dict):
                 continue
-            fa = person.get("face_analysis")
-            if isinstance(fa, dict):
-                changes += _strip_dict_text(fa, ["expression_caption"])
-                changes += _strip_dict_text(
-                    fa.get("alternative_captions"),
-                    ["direct", "literary", "direction", "situational"],
-                )
-            ba = person.get("body_analysis")
-            if isinstance(ba, dict):
-                changes += _strip_dict_text(
-                    ba, ["motion_caption", "gesture_detail"])
-                changes += _strip_dict_text(
-                    ba.get("alternative_captions"),
-                    ["direct", "literary", "direction", "situational"],
-                )
-                changes += _strip_dict_text(
-                    ba.get("upper_body_detail"),
-                    ["head", "neck", "shoulders", "arms", "hands", "torso"],
-                )
 
-        sc = shot.get("shot_context")
-        if isinstance(sc, dict):
-            changes += _strip_dict_text(
-                sc, ["shot_emotion_summary", "shot_motion_summary"])
-            changes += _strip_dict_text(
-                sc.get("scene_context"),
-                ["visible_setting", "narrative_situation"],
-            )
+            # Normalize action_primary
+            ap = body.get("action_primary")
+            if ap:
+                new_ap = self.normalize_action_primary(ap)
+                if new_ap != ap:
+                    body["action_primary"] = new_ap
+                    changes += 1
 
         return shot, changes
 

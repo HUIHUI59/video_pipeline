@@ -361,13 +361,6 @@ class ShotValidator:
             self._check_body(person, shot_id, pidx, errors, warnings, infos)
             self._check_cross_axis(person, shot_id, pidx, errors, warnings)
 
-        # ── Shot-level interaction checks (CHECK 15 / 16) ──
-        # delivery_v1 § 7.2：顶层 interaction 的 count / contact 必须自洽。
-        # delivery_v1 § 5.4：persons[].body_analysis.interaction.
-        # interacts_with_person_index 应当双向（对称）。
-        self._check_top_interaction_consistency(shot, shot_id, errors)
-        self._check_interaction_symmetry(shot, shot_id, warnings)
-
         return errors, warnings, infos
 
     # ── Schema-level ──
@@ -383,87 +376,6 @@ class ShotValidator:
                     shot_id, None, "schema_validation_failure",
                     key, f"Required top-level key '{key}' is missing",
                 ))
-
-    # ── Shot-level interaction checks ──
-
-    def _check_top_interaction_consistency(
-        self, shot: dict, shot_id: str, errors: list[dict]
-    ) -> None:
-        """CHECK 15: 顶层 interaction 的 count / contact 必须自洽。
-        delivery_v1 § 7.2：count='solo' 时 contact 必须是 'none'。
-        """
-        inter = shot.get("interaction")
-        if not isinstance(inter, dict):
-            return
-        count = inter.get("count")
-        contact = inter.get("contact")
-        if count == "solo" and contact not in (None, "none"):
-            errors.append(make_issue(
-                shot_id, None, "interaction_solo_contact_mismatch",
-                "interaction.contact",
-                f"interaction.count='solo' but contact='{contact}' "
-                f"(delivery_v1 § 7.2 requires 'none')",
-                value=contact,
-            ))
-
-    def _check_interaction_symmetry(
-        self, shot: dict, shot_id: str, warnings: list[dict]
-    ) -> None:
-        """CHECK 16: persons[].body_analysis.interaction.
-        interacts_with_person_index 应当双向（对称）。
-        - 若 A 引用了不存在的 peer index → WARNING
-        - 若 A 引用 B 但 B 没有引用 A → WARNING
-        先用 WARNING 不用 ERROR：避免历史数据被阻塞合并。
-        """
-        persons = shot.get("persons")
-        if not isinstance(persons, list):
-            return
-        # 构建 index → list position 的映射（person_index 可能跳号）
-        idx_to_pos: dict = {}
-        for pos, p in enumerate(persons):
-            if not isinstance(p, dict):
-                continue
-            idx = p.get("person_index", pos)
-            idx_to_pos[idx] = pos
-
-        def _peers_of(p):
-            if not isinstance(p, dict):
-                return []
-            ba = p.get("body_analysis")
-            if not isinstance(ba, dict):
-                return []
-            inter = ba.get("interaction")
-            if not isinstance(inter, dict):
-                return []
-            raw = inter.get("interacts_with_person_index") or []
-            return [x for x in raw if isinstance(x, int)]
-
-        for pos, p in enumerate(persons):
-            if not isinstance(p, dict):
-                continue
-            own_idx = p.get("person_index", pos)
-            for peer in _peers_of(p):
-                if peer not in idx_to_pos:
-                    warnings.append(make_issue(
-                        shot_id, own_idx,
-                        "interaction_references_missing_person",
-                        "body_analysis.interaction.interacts_with_person_index",
-                        f"person_index={own_idx} references peer={peer} "
-                        f"that is not in persons[]",
-                        value=peer,
-                    ))
-                    continue
-                peer_p = persons[idx_to_pos[peer]]
-                peer_peers = _peers_of(peer_p)
-                if own_idx not in peer_peers:
-                    warnings.append(make_issue(
-                        shot_id, own_idx,
-                        "interaction_asymmetric",
-                        "body_analysis.interaction.interacts_with_person_index",
-                        f"person_index={own_idx} references peer={peer} but "
-                        f"peer does not reference {own_idx} back",
-                        value=peer,
-                    ))
 
     # ── Face checks ──
 

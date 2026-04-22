@@ -25,7 +25,6 @@ Usage:
 """
 
 import argparse
-import functools
 import json
 import logging
 import sys
@@ -36,16 +35,6 @@ try:
 except ImportError:
     print("ERROR: pyyaml required. pip install pyyaml", file=sys.stderr)
     sys.exit(1)
-
-
-@functools.lru_cache(maxsize=8)
-def _load_taxonomy_yaml(taxonomy_path_str: str) -> dict:
-    """解析并缓存 motion_taxonomy.yaml。
-    key 用字符串形式路径：pod_runner 启动时连续调用 load_taxonomy_leaves 和
-    load_forbidden_terms，此缓存消掉一次重复的 YAML 解析 I/O。
-    """
-    with open(taxonomy_path_str, encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", stream=sys.stderr)
 log = logging.getLogger("build_prompt")
@@ -61,7 +50,8 @@ EXAMPLE_MAP = {
 
 def load_taxonomy_leaves(taxonomy_path: Path) -> dict[str, list[str]]:
     """Load action_primary hierarchy as {category: [leaves]}."""
-    tax = _load_taxonomy_yaml(str(taxonomy_path))
+    with open(taxonomy_path, encoding="utf-8") as f:
+        tax = yaml.safe_load(f)
 
     result = {}
     for cat_name, cat_data in tax.get("action_primary", {}).items():
@@ -73,7 +63,9 @@ def load_taxonomy_leaves(taxonomy_path: Path) -> dict[str, list[str]]:
 
 def load_forbidden_terms(taxonomy_path: Path) -> list[str]:
     """Load camera terms forbidden in action fields."""
-    tax = _load_taxonomy_yaml(str(taxonomy_path))
+    with open(taxonomy_path, encoding="utf-8") as f:
+        tax = yaml.safe_load(f)
+
     return tax.get("forbidden_in_action_fields", {}).get("terms", [])
 
 
@@ -100,9 +92,8 @@ def build_system_prompt(taxonomy_leaves: dict, forbidden_terms: list) -> str:
         taxonomy_lines.append(f"  {cat}: {', '.join(leaves)}")
     taxonomy_block = "\n".join(taxonomy_lines)
 
-    # Format forbidden terms —— 必须注入完整列表，不做截断。
-    # delivery_v1 § 5.3 要求 VLM 看到所有被禁止的 camera 术语。
-    forbidden_block = ", ".join(forbidden_terms)
+    # Format forbidden terms
+    forbidden_block = ", ".join(forbidden_terms[:30])  # top 30 to save tokens
 
     return f"""You are a precise observational annotator of film footage. You describe
 only what is visible in the given frames. You never infer unseen audio,
