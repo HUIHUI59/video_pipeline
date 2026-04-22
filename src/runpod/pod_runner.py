@@ -400,10 +400,41 @@ def main() -> int:
         from validate_body_analysis import (
             ShotValidator, TaxonomyLoader, SynonymLoader,
             FRAMING_MAX_PARTS,
+            VALID_EMOTIONS, VALID_TEMPORAL_CHANGES,
+            VALID_SHOT_FRAMES, VALID_INTENSITIES,
         )
     except ImportError as e:
         log.error(f"delivery_v1 scripts import 失败: {e}")
         return 4
+
+    # Canonical-order tuples for R1/R2/R3 prompts. Assert set equality against
+    # spec-exported VALID_* to catch any drift at startup (delivery_v1 is
+    # read-only baseline; prompts must stay in sync with its enums).
+    _SPEC_EMOTIONS = ("anger", "sadness", "joy", "fear", "surprise",
+                      "disgust", "contempt", "neutral", "complex")
+    _SPEC_TEMPORAL_CHANGES = ("static", "building", "peak_then_release",
+                              "transition", "rapid_micro")
+    _SPEC_SHOT_FRAMES = ("close_face", "bust", "half_body", "three_quarter",
+                         "full_body", "wide")
+    _SPEC_INTENSITIES = ("low", "mid", "high")
+    for _name, _tup, _set in [
+        ("VALID_EMOTIONS", _SPEC_EMOTIONS, VALID_EMOTIONS),
+        ("VALID_TEMPORAL_CHANGES", _SPEC_TEMPORAL_CHANGES,
+         VALID_TEMPORAL_CHANGES),
+        ("VALID_SHOT_FRAMES", _SPEC_SHOT_FRAMES, VALID_SHOT_FRAMES),
+        ("VALID_INTENSITIES", _SPEC_INTENSITIES, VALID_INTENSITIES),
+    ]:
+        if set(_tup) != _set:
+            log.error(
+                f"pod prompt enum drifted from spec {_name}: "
+                f"pod={sorted(_tup)} spec={sorted(_set)}. "
+                f"Update pod_runner._SPEC_* tuples to match spec."
+            )
+            return 4
+    _EMOTIONS_STR = "|".join(_SPEC_EMOTIONS)
+    _TEMPORAL_STR = "|".join(_SPEC_TEMPORAL_CHANGES)
+    _SHOT_FRAMES_STR = "|".join(_SPEC_SHOT_FRAMES)
+    _INTENSITIES_STR = " | ".join(f"'{v}'" for v in _SPEC_INTENSITIES)
 
     try:
         taxonomy_leaves = load_taxonomy_leaves(tax_path)
@@ -804,8 +835,7 @@ def main() -> int:
             "STRICT face_analysis STRUCTURE (do NOT flatten):\n"
             "  - face_clearly_visible: bool — REQUIRED, never omit\n"
             "  - primary_emotion: STRICT 9-class enum ONLY — "
-            "anger|sadness|joy|fear|surprise|disgust|contempt|neutral|"
-            "complex. DO NOT invent or paraphrase (e.g. 'concern', "
+            f"{_EMOTIONS_STR}. DO NOT invent or paraphrase (e.g. 'concern', "
             "'worried', 'happy', 'anxious', 'annoyed' are ALL INVALID — "
             "map to fear/joy/fear/anger respectively, or use 'complex' "
             "if truly mixed). secondary_emotion follows the same enum "
@@ -832,8 +862,7 @@ def main() -> int:
             "Each value MUST be one of: 'none' | 'slight' | 'medium' | "
             "'strong' | 'unknown' (5 classes, qualitative only — no "
             "numeric scales, no free text). NOT a flat string.\n"
-            "  - temporal_change enum: static|building|peak_then_release|"
-            "transition|rapid_micro\n"
+            f"  - temporal_change enum: {_TEMPORAL_STR}\n"
             "  - expression_confidence: number [0,1]\n\n"
             "COMPACT JSON, no pretty-print. expression_caption 50-120 "
             "words (delivery_v1 spec). alternative_captions per-key "
@@ -976,8 +1005,7 @@ def main() -> int:
                 f"persons[] array or other people's data). "
                 f"Follow delivery_v1 body_analysis spec:\n"
                 "  - body_clearly_visible: bool\n"
-                "  - shot_frame_of_body: close_face|bust|half_body|"
-                "three_quarter|full_body|wide\n"
+                f"  - shot_frame_of_body: {_SHOT_FRAMES_STR}\n"
                 "  - visible_body_parts: list[str]\n"
                 "  - motion_caption: 50-180 words REQUIRED (write at "
                 "least 50 words describing body motion in detail; <50 "
@@ -991,7 +1019,7 @@ def main() -> int:
                 "  - action_primary: taxonomy leaf (walking, sitting, etc.)\n"
                 "  - action_quality: OBJECT {intensity, tone, tempo}, "
                 "NOT a string. STRICT VALUES:\n"
-                "      intensity: 'low' | 'mid' | 'high' (enum only)\n"
+                f"      intensity: {_INTENSITIES_STR} (enum only)\n"
                 "      tone: free-form describing emotional/physical "
                 "character (e.g. 'tense', 'relaxed', 'urgent', "
                 "'deliberate'). DO NOT use camera/cinematography terms "
