@@ -132,6 +132,23 @@ def _write_merged_config(
     return target_path
 
 
+def _pid_alive(pid: int) -> bool:
+    """True if pid corresponds to a live process. Signal 0 probes without
+    sending anything. We treat PermissionError as alive (exists, just not
+    ours — shouldn't happen for pod_control-spawned PIDs but be safe)."""
+    if pid is None or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+
+
 class Runner:
     """Lifecycle owner for the single active run slot."""
 
@@ -150,6 +167,25 @@ class Runner:
         self._popen = subprocess.Popen
         self._active_popen = None
         self._active_stdout_fh = None
+        # Sweep any leftover active_run whose PID no longer exists
+        # (previous API process crashed / was restarted mid-run).
+        self.recover_orphaned()
+
+    # ── Orphan recovery ─────────────────────────────────────────────
+
+    def recover_orphaned(self) -> None:
+        """If state.active_run points at a PID that's no longer alive,
+        finalize it as 'killed' (unknown exit code) and flip the
+        associated batch back to 'failed' so the UI doesn't render a
+        permanently-running ghost."""
+        state = self.store.read_state()
+        if state.active_run is None:
+            return
+        pid = state.active_run.pid
+        # The current Runner instance can only poll a Popen it owns. If
+        # we don't own one (fresh process) AND the PID is dead, clean up.
+        if self._active_popen is None and not _pid_alive(pid):
+            self._finalize(returncode=None)
 
     # ── Launch ──────────────────────────────────────────────────────
 
@@ -231,6 +267,17 @@ class Runner:
 
         self._active_popen = proc
         self._active_stdout_fh = stdout_fh
+
+        # Flip the batch to "running" so _finalize() can later sync it.
+        batch_obj = self.store.get_batch(batch.name)
+        if batch_obj is not None:
+            batch_obj.status = "running"
+            batch_obj.last_run_id = record.id
+            try:
+                self.store.save_batch(batch_obj, overwrite=True)
+            except Exception:
+                pass
+
         return record
 
     # ── Poll + finalize ─────────────────────────────────────────────
@@ -242,6 +289,11 @@ class Runner:
             return None
         proc = self._active_popen
         if proc is None:
+            # No Popen handle — check the recorded PID. If dead, clean up.
+            pid = state.active_run.pid
+            if not _pid_alive(pid):
+                self._finalize(returncode=None)
+                return self.store.read_state().active_run
             return state.active_run
         rc = proc.poll()
         if rc is None:
@@ -258,6 +310,7 @@ class Runner:
                 pass
             self._active_stdout_fh = None
         self._active_popen = None
+        finalized_rec: RunRecord | None = None
         with self.store.state_lock() as state:
             if state.active_run is None:
                 return
@@ -273,6 +326,19 @@ class Runner:
             state.history.insert(0, rec)
             state.history = state.history[:20]
             state.active_run = None
+            finalized_rec = rec
+        # Sync the associated batch out of "running" so the UI can delete
+        # or re-launch it. done-runs flip batch→done, anything else→failed.
+        if finalized_rec is not None:
+            batch = self.store.get_batch(finalized_rec.batch_name)
+            if batch is not None and batch.status == "running":
+                batch.status = (
+                    "done" if finalized_rec.status == "done" else "failed"
+                )
+                try:
+                    self.store.save_batch(batch, overwrite=True)
+                except Exception:
+                    pass
 
     # ── Kill ────────────────────────────────────────────────────────
 

@@ -320,6 +320,9 @@ def create_app(
 
     @app.get("/api/batches")
     def list_batches() -> dict:
+        # Poll so any exited run flips its batch out of "running" before
+        # the UI reads the list.
+        runner.poll_active()
         return {"batches": [b.model_dump() for b in store.list_batches()]}
 
     @app.get("/api/batches/{name}")
@@ -331,6 +334,9 @@ def create_app(
 
     @app.delete("/api/batches/{name}", status_code=204)
     def delete_batch(name: str) -> Response:
+        # Refresh state: a still-alive process will keep the lock; a
+        # dead one will be finalized here and delete will succeed.
+        runner.poll_active()
         try:
             store.delete_batch(name)
         except StoreError as ex:
@@ -343,6 +349,7 @@ def create_app(
     def reset_batch(name: str) -> dict:
         """Flip a stuck batch (running/failed/done) back to ready so the
         user can re-launch it. Refuses if it's the active run."""
+        runner.poll_active()
         b = store.get_batch(name)
         if b is None:
             raise _err("batch_not_found", f"batch {name!r} not found",

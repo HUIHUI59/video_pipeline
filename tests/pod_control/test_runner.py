@@ -4,6 +4,7 @@ Popen + os.killpg are mocked — no real subprocess is spawned.
 """
 from __future__ import annotations
 
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -292,6 +293,89 @@ def test_kill_active_tolerates_process_already_gone(
 
 
 # ── History cap -------------------------------------------------
+
+
+def test_finalize_flips_batch_status_to_failed_on_nonzero(
+    runner_with_fake_script,
+):
+    r = runner_with_fake_script
+    b = _batch(name="bf")
+    r.store.save_batch(b)
+    fake_popen = MagicMock()
+    fake_popen.pid = 111
+    fake_popen.poll.return_value = 3
+    with patch("src.pod_control.runner.os.setsid"):
+        r._popen = MagicMock(return_value=fake_popen)
+        r.launch(b, _pod())
+    r.poll_active()
+    refreshed = r.store.get_batch("bf")
+    assert refreshed.status == "failed"
+
+
+def test_finalize_flips_batch_status_to_done_on_zero(
+    runner_with_fake_script,
+):
+    r = runner_with_fake_script
+    b = _batch(name="bd")
+    r.store.save_batch(b)
+    fake_popen = MagicMock()
+    fake_popen.pid = 112
+    fake_popen.poll.return_value = 0
+    with patch("src.pod_control.runner.os.setsid"):
+        r._popen = MagicMock(return_value=fake_popen)
+        r.launch(b, _pod())
+    r.poll_active()
+    assert r.store.get_batch("bd").status == "done"
+
+
+def test_recover_orphaned_finalizes_dead_pid(tmp_path, store):
+    """After a server restart with state.active_run pointing at a dead
+    PID, the next Runner construction should sweep it."""
+    from src.pod_control.store import RunRecord
+    # Seed a fake active_run with a PID that's certainly not alive.
+    with store.state_lock() as state:
+        state.active_run = RunRecord(
+            id="ghost", batch_name="bg", pod_name="p",
+            pid=2**30,  # arbitrary huge PID unlikely to exist
+        )
+    # Save a corresponding batch in running state.
+    store.save_batch(_batch(name="bg", status="running"))
+
+    fake_run_all = tmp_path / "run_all.sh"
+    fake_run_all.write_text("#!/bin/bash\necho hi\n")
+    out_root = tmp_path / "out"
+    out_root.mkdir()
+    Runner(
+        store,
+        run_all_script=fake_run_all,
+        output_root_provider=lambda: out_root,
+    )
+    assert store.read_state().active_run is None
+    assert store.get_batch("bg").status == "failed"
+
+
+def test_recover_orphaned_leaves_live_pid_alone(tmp_path, store):
+    """If the active_run's PID happens to still be alive, don't sweep it."""
+    from src.pod_control.store import RunRecord
+    # Current process PID is certainly alive.
+    with store.state_lock() as state:
+        state.active_run = RunRecord(
+            id="mine", batch_name="bm", pod_name="p",
+            pid=os.getpid(),
+        )
+    store.save_batch(_batch(name="bm", status="running"))
+
+    fake_run_all = tmp_path / "run_all.sh"
+    fake_run_all.write_text("#!/bin/bash\necho hi\n")
+    out_root = tmp_path / "out"
+    out_root.mkdir()
+    Runner(
+        store,
+        run_all_script=fake_run_all,
+        output_root_provider=lambda: out_root,
+    )
+    assert store.read_state().active_run is not None
+    assert store.get_batch("bm").status == "running"
 
 
 def test_history_capped_at_20(runner_with_fake_script):
