@@ -53,7 +53,7 @@ const CATEGORY_DEFAULTS = ["single", "dominant", "multi"];
 const CATEGORY_CHOICES = ["single", "dominant", "multi", "wide", "landscape"];
 
 const state = {
-  currentMovie: null,
+  selectedMovies: new Set(),
   page: 1,
   pageSize: 20,
 };
@@ -113,8 +113,23 @@ async function loadMovies() {
     for (const m of movies) {
       const li = document.createElement("li");
       li.dataset.movie = m.movie;
-      li.innerHTML = `<span>${m.movie}</span><span class="count">${m.total_shots} shots · ok=${m.quality_ok_count}</span>`;
-      li.addEventListener("click", () => selectMovie(m.movie));
+      li.innerHTML = `
+        <label>
+          <input type="checkbox" class="movie-cb" value="${m.movie}" />
+          ${m.movie}
+        </label>
+        <span class="count">${m.total_shots} · ok=${m.quality_ok_count}</span>`;
+      li.querySelector(".movie-cb").addEventListener("change", (e) => {
+        e.stopPropagation();
+        toggleMovie(m.movie, e.target.checked);
+      });
+      // Clicking the row (outside the checkbox) also toggles — convenience.
+      li.addEventListener("click", (e) => {
+        if (e.target.tagName === "INPUT" || e.target.tagName === "LABEL") return;
+        const cb = li.querySelector(".movie-cb");
+        cb.checked = !cb.checked;
+        toggleMovie(m.movie, cb.checked);
+      });
       ul.appendChild(li);
     }
   } catch (err) {
@@ -134,7 +149,10 @@ async function loadBatches() {
     }
     for (const b of batches) {
       const li = document.createElement("li");
-      li.innerHTML = `<span>${b.name} <small class="muted">(${b.movie} · ${b.shot_count})</small></span>`;
+      const moviesLabel = (b.movies && b.movies.length > 1)
+        ? `${b.movies.length} movies`
+        : (b.movies?.[0] ?? b.movie ?? "?");
+      li.innerHTML = `<span>${b.name} <small class="muted">(${moviesLabel} · ${b.shot_count})</small></span>`;
       const del = document.createElement("button");
       del.className = "delete-btn";
       del.textContent = "delete";
@@ -157,23 +175,38 @@ async function loadBatches() {
   }
 }
 
-function selectMovie(movie) {
-  state.currentMovie = movie;
+function toggleMovie(movie, selected) {
+  if (selected) state.selectedMovies.add(movie);
+  else state.selectedMovies.delete(movie);
   state.page = 1;
   $$("#movie-list li").forEach((li) =>
-    li.classList.toggle("active", li.dataset.movie === movie)
+    li.classList.toggle("active", state.selectedMovies.has(li.dataset.movie))
   );
+  const count = state.selectedMovies.size;
+  if (count === 0) {
+    $("#empty-hint").hidden = false;
+    $("#filter-panel").hidden = true;
+    return;
+  }
   $("#empty-hint").hidden = true;
   $("#filter-panel").hidden = false;
-  $("#current-movie").textContent = movie;
+  $("#current-movie").textContent = count === 1
+    ? [...state.selectedMovies][0]
+    : `${count} movies`;
   applyFilter();
 }
 
 async function fetchPreview(extraParams = {}) {
+  const selected = [...state.selectedMovies];
+  if (selected.length === 0) {
+    return { shots: [], total: 0, page: 1, page_size: state.pageSize };
+  }
+  const [first, ...rest] = selected;
   const params = currentFilterQuery();
+  if (rest.length) params.set("movies", rest.join(","));
   for (const [k, v] of Object.entries(extraParams)) params.set(k, v);
   return jsonOrThrow(
-    await fetch(`/api/movies/${state.currentMovie}/preview?${params}`)
+    await fetch(`/api/movies/${encodeURIComponent(first)}/preview?${params}`)
   );
 }
 
@@ -247,7 +280,7 @@ $("#save-batch-form").addEventListener("submit", async (e) => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         name,
-        movie: state.currentMovie,
+        movies: [...state.selectedMovies],
         filter_params: currentFilterParams(),
       }),
     });
@@ -284,8 +317,9 @@ async function populateDirectPodSel() {
 
 $("#direct-launch-btn").addEventListener("click", async () => {
   const msg = $("#direct-launch-msg");
-  if (!state.currentMovie) {
-    msg.textContent = "pick a movie first";
+  const movies = [...state.selectedMovies];
+  if (!movies.length) {
+    msg.textContent = "pick at least one movie first";
     return;
   }
   const podName = $("#direct-pod-sel").value;
@@ -293,7 +327,9 @@ $("#direct-launch-btn").addEventListener("click", async () => {
     msg.textContent = "pick a pod first";
     return;
   }
-  if (!confirm(`launch inference on movie "${state.currentMovie}" using pod "${podName}"?`)) {
+  const label = movies.length === 1 ? `movie "${movies[0]}"`
+                                    : `${movies.length} movies`;
+  if (!confirm(`launch inference on ${label} using pod "${podName}"?`)) {
     return;
   }
   msg.textContent = "launching…";
@@ -302,7 +338,7 @@ $("#direct-launch-btn").addEventListener("click", async () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        movie: state.currentMovie,
+        movies,
         pod_name: podName,
         preset_path: $("#direct-preset").value.trim() || null,
         filter_params: currentFilterParams(),

@@ -51,7 +51,7 @@ def _build_run_all_cmd(
     if preset_path:
         cmd += ["--config", preset_path]
     fp = batch.filter_params
-    cmd += ["--movies", batch.movie]
+    cmd += ["--movies", ",".join(batch.movies)]
     if fp.categories:
         cmd += ["--categories", ",".join(fp.categories)]
     if not fp.skip_bad_quality:

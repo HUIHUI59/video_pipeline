@@ -191,6 +191,19 @@ main {
   transition: background 120ms;
 }
 
+.list li label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  cursor: pointer;
+  flex: 1;
+  color: inherit;
+}
+
+.list li input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+
 .list li:last-child { border-bottom: none; }
 .list li:hover { background: var(--panel-lift); }
 .list li.active {

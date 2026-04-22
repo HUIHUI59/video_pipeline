@@ -28,7 +28,8 @@ _CLIP_CHUNK = 1 << 20  # 1 MiB
 
 class SaveBatchRequest(BaseModel):
     name: str
-    movie: str
+    movies: list[str] = []
+    movie: str | None = None   # back-compat: accepted, then folded into movies
     filter_params: FilterParams
 
     @field_validator("name")
@@ -40,6 +41,13 @@ class SaveBatchRequest(BaseModel):
             )
         return v
 
+    def resolved_movies(self) -> list[str]:
+        if self.movies:
+            return self.movies
+        if self.movie:
+            return [self.movie]
+        return []
+
 
 class LaunchRunRequest(BaseModel):
     batch_name: str
@@ -48,10 +56,18 @@ class LaunchRunRequest(BaseModel):
 
 
 class QuickLaunchRequest(BaseModel):
-    movie: str
+    movies: list[str] = []
+    movie: str | None = None   # back-compat
     pod_name: str
     filter_params: FilterParams = FilterParams()
     preset_path: str | None = None
+
+    def resolved_movies(self) -> list[str]:
+        if self.movies:
+            return self.movies
+        if self.movie:
+            return [self.movie]
+        return []
 
 
 class OutputRootRequest(BaseModel):
@@ -221,6 +237,10 @@ def create_app(
             None,
             description="comma-separated categories; default single,dominant,multi",
         ),
+        movies: str | None = Query(
+            None,
+            description="comma-separated extra movies to aggregate with {movie}",
+        ),
         skip_bad_quality: bool = True,
         skip_landscape: bool = True,
         max_shots: int | None = None,
@@ -240,14 +260,29 @@ def create_app(
             skip_landscape=skip_landscape,
             max_shots=max_shots,
         )
+        # Aggregate path movie + optional extras (client can pass '' to just
+        # exercise the path segment as a single-movie preview).
+        all_movies = [movie] + (
+            [m.strip() for m in movies.split(",") if m.strip()]
+            if movies else []
+        )
+        # De-dupe while preserving order.
+        seen: set[str] = set()
+        unique_movies = [m for m in all_movies if not (m in seen or seen.add(m))]
         try:
-            matched = pcfilter.filter_movie(out, movie, params)
+            matched = pcfilter.filter_movies(out, unique_movies, params)
         except Exception as ex:
             raise _err("invalid_filter", str(ex))
-        if not matched and not pcfilter.manifest_dir(out).joinpath(
-            f"{movie}.jsonl"
-        ).exists():
-            raise _err("movie_not_found", f"no manifest for {movie!r}", status=404)
+        # 404 only when NO manifest exists for any requested movie.
+        if not matched:
+            any_exists = any(
+                pcfilter.manifest_dir(out).joinpath(f"{m}.jsonl").exists()
+                for m in unique_movies
+            )
+            if not any_exists:
+                raise _err("movie_not_found",
+                           f"no manifest for any of: {unique_movies}",
+                           status=404)
         return pcfilter.paginate(
             matched,
             page=page,
@@ -258,13 +293,17 @@ def create_app(
     @app.post("/api/batches", status_code=201)
     def create_batch(req: SaveBatchRequest) -> dict:
         out = _require_output_root()
+        movies = req.resolved_movies()
+        if not movies:
+            raise _err("invalid_filter",
+                       "movies must be non-empty (use movies: list or movie: str)")
         try:
-            matched = pcfilter.filter_movie(out, req.movie, req.filter_params)
+            matched = pcfilter.filter_movies(out, movies, req.filter_params)
         except Exception as ex:
             raise _err("invalid_filter", str(ex))
         batch = Batch(
             name=req.name,
-            movie=req.movie,
+            movies=movies,
             filter_params=req.filter_params,
             shot_count=len(matched),
         )
@@ -390,38 +429,47 @@ def create_app(
 
     @app.post("/api/runs/quick", status_code=201)
     def quick_launch(req: QuickLaunchRequest) -> dict:
-        """Ad-hoc launch: auto-create a throwaway batch, then launch.
-
-        Batch name is <movie_slug>_<YYYYmmddHHMMSS>. If the movie has a
-        space/punctuation we lowercase + slugify aggressively. The batch
-        file still lives on disk so it can be reviewed + re-run after
-        the run ends, but the user didn't have to pre-save it.
-        """
+        """Ad-hoc launch: auto-create a throwaway batch, then launch."""
         out = _require_output_root()
+        movies = req.resolved_movies()
+        if not movies:
+            raise _err("invalid_filter",
+                       "movies must be non-empty (use movies: list or movie: str)")
         try:
-            matched = pcfilter.filter_movie(out, req.movie, req.filter_params)
+            matched = pcfilter.filter_movies(out, movies, req.filter_params)
         except Exception as ex:
             raise _err("invalid_filter", str(ex))
-        if not matched and not pcfilter.manifest_dir(out).joinpath(
-            f"{req.movie}.jsonl"
-        ).exists():
-            raise _err("movie_not_found",
-                       f"no manifest for {req.movie!r}", status=404)
+        # If every movie manifest is missing, bail with a useful error.
+        if not matched:
+            existing = [
+                m for m in movies
+                if pcfilter.manifest_dir(out).joinpath(f"{m}.jsonl").exists()
+            ]
+            if not existing:
+                raise _err(
+                    "movie_not_found",
+                    f"no manifest for any of: {movies}",
+                    status=404,
+                )
+
         pod = store.get_pod(req.pod_name)
         if pod is None:
             raise _err("pod_not_found",
                        f"pod {req.pod_name!r} not found", status=404)
 
-        # Auto-name: movie → alnum/dash slug, truncated.
-        slug = "".join(
-            c if c.isalnum() or c in "-_" else "_" for c in req.movie
-        )[:40] or "batch"
+        # Auto-name: single movie → slug + timestamp; multi → count + timestamp.
+        if len(movies) == 1:
+            slug = "".join(
+                c if c.isalnum() or c in "-_" else "_" for c in movies[0]
+            )[:40] or "batch"
+        else:
+            slug = f"multi_{len(movies)}movies"
         stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime())
         name = f"{slug}_{stamp}"
 
         batch = Batch(
             name=name,
-            movie=req.movie,
+            movies=movies,
             filter_params=req.filter_params,
             shot_count=len(matched),
         )

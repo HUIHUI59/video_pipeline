@@ -56,11 +56,24 @@ def filter_movie(
     movie: str,
     params: FilterParams,
 ) -> list[dict[str, Any]]:
-    """Apply FilterParams to one movie; return a list of matched entry dicts."""
+    """Single-movie wrapper around filter_movies (kept for compat)."""
+    return filter_movies(output_root, [movie], params)
+
+
+def filter_movies(
+    output_root: str | Path,
+    movies: list[str],
+    params: FilterParams,
+) -> list[dict[str, Any]]:
+    """Apply FilterParams across any number of movies.
+
+    max_shots caps the TOTAL across all movies, matching upload.py
+    semantics (the filter loop breaks once the cap is hit).
+    """
     md = manifest_dir(output_root)
-    if not md.exists():
+    if not md.exists() or not movies:
         return []
-    raw = list(_iter_manifest_lines(str(md), {movie}))
+    raw = list(_iter_manifest_lines(str(md), set(movies)))
     filtered = _filter_entries(
         raw,
         categories=params.categories or None,

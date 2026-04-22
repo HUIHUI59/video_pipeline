@@ -31,8 +31,31 @@ def test_filter_params_defaults():
 
 def test_batch_name_must_be_slug():
     with pytest.raises(ValueError):
-        Batch(name="bad name!", movie="m", filter_params=FilterParams())
-    Batch(name="ok-name_1", movie="m", filter_params=FilterParams())  # passes
+        Batch(name="bad name!", movies=["m"], filter_params=FilterParams())
+    Batch(name="ok-name_1", movies=["m"], filter_params=FilterParams())
+
+
+def test_batch_legacy_movie_field_upgrades_to_movies():
+    """Loading a batch JSON written pre-migration should still work."""
+    b = Batch.model_validate({
+        "name": "legacy1",
+        "movie": "The_Dinner_2017",
+        "filter_params": {},
+    })
+    assert b.movies == ["The_Dinner_2017"]
+    # Property accessor also works.
+    assert b.movie == "The_Dinner_2017"
+
+
+def test_batch_movies_list_supported():
+    b = Batch(name="multi1", movies=["M1", "M2", "M3"],
+              filter_params=FilterParams())
+    assert b.movies == ["M1", "M2", "M3"]
+
+
+def test_batch_movies_must_not_be_empty():
+    with pytest.raises(ValueError, match="at least one"):
+        Batch(name="x", movies=[], filter_params=FilterParams())
 
 
 def test_pod_name_must_be_slug():

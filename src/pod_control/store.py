@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Iterator, Literal
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 # ── Pydantic models (shared with api.py) ──
@@ -44,12 +44,30 @@ class FilterParams(BaseModel):
 
 class Batch(BaseModel):
     name: str
-    movie: str
+    movies: list[str] = Field(default_factory=list)
     filter_params: FilterParams
     shot_count: int = 0
     status: BatchStatus = "ready"
     created_at: float = Field(default_factory=time.time)
     last_run_id: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _legacy_movie_to_movies(cls, data):
+        """Backward compat: older batch files stored {"movie": "X"}.
+
+        Convert singular `movie` → `movies=[movie]` on load so existing
+        files keep working after the multi-movie migration.
+        """
+        if not isinstance(data, dict):
+            return data
+        if "movies" in data:
+            return data
+        m = data.get("movie")
+        if m is not None and not data.get("movies"):
+            data = {**data, "movies": [m] if isinstance(m, str) else list(m)}
+            data.pop("movie", None)
+        return data
 
     @field_validator("name")
     @classmethod
@@ -59,6 +77,21 @@ class Batch(BaseModel):
                 f"batch name must be alnum / - / _ only, got {v!r}"
             )
         return v
+
+    @field_validator("movies")
+    @classmethod
+    def _movies_nonempty(cls, v: list[str]) -> list[str]:
+        if not v:
+            raise ValueError("batch.movies must have at least one entry")
+        for m in v:
+            if not m or not isinstance(m, str):
+                raise ValueError(f"invalid movie name {m!r}")
+        return v
+
+    @property
+    def movie(self) -> str:
+        """Back-compat alias — returns first movie or raises."""
+        return self.movies[0]
 
 
 class PodProfile(BaseModel):
