@@ -110,17 +110,22 @@ def _filter_entries(entries: list[tuple[str, ManifestEntry]],
                     max_shots: int | None,
                     skip_bad_quality: bool = True,
                     skip_landscape: bool = True,
+                    min_duration_sec: float | None = None,
+                    max_duration_sec: float | None = None,
                     ) -> list[tuple[str, ManifestEntry]]:
     """
     依次过滤：
       1. shot_category 不在 categories 白名单里 → 跳（categories 为空则不过滤）
       2. shot_category == "landscape" 且 skip_landscape=True → 跳（无人标注无意义）
       3. quality_ok == False 且 skip_bad_quality=True → 跳
-      4. 达到 max_shots 上限 → 停止
+      4. duration_sec 不在 [min_duration_sec, max_duration_sec] 区间 → 跳
+         (None 边界视为无限制；两端都是闭区间)
+      5. 达到 max_shots 上限 → 停止
     """
     out = []
     skipped_quality   = 0
     skipped_landscape = 0
+    skipped_duration  = 0
     cat_set = set(categories) if categories else None
     for movie, e in entries:
         if cat_set and e.shot_category not in cat_set:
@@ -132,6 +137,12 @@ def _filter_entries(entries: list[tuple[str, ManifestEntry]],
         if skip_bad_quality and e.quality_ok is False:
             skipped_quality += 1
             continue
+        if min_duration_sec is not None and e.duration_sec < min_duration_sec:
+            skipped_duration += 1
+            continue
+        if max_duration_sec is not None and e.duration_sec > max_duration_sec:
+            skipped_duration += 1
+            continue
         out.append((movie, e))
         if max_shots and len(out) >= max_shots:
             break
@@ -141,6 +152,9 @@ def _filter_entries(entries: list[tuple[str, ManifestEntry]],
     if skipped_quality:
         log.info(f"[quality] 跳过画质不合格镜头 {skipped_quality} 个"
                  f"（--include-bad-quality 可关闭此过滤）")
+    if skipped_duration:
+        log.info(f"[duration] 跳过时长不符的 {skipped_duration} 个"
+                 f"（--min-duration / --max-duration 约束）")
     return out
 
 
@@ -187,6 +201,10 @@ def main() -> int:
                     help="即使 quality_ok=False 也上传（默认过滤掉太黑/太亮/模糊的镜头）")
     ap.add_argument("--include-landscape", action="store_true",
                     help="即使 shot_category=landscape 也上传（默认无人的镜头不标注）")
+    ap.add_argument("--min-duration", type=float, default=None,
+                    help="只上传 duration_sec >= 该值的镜头（秒，闭区间）")
+    ap.add_argument("--max-duration", type=float, default=None,
+                    help="只上传 duration_sec <= 该值的镜头（秒，闭区间）")
     ap.add_argument("--code-only", action="store_true",
                     help="只推代码 + 配置 + delivery_v1（跳过 clips 和 manifest）；"
                          "用于迭代 pod_runner 代码时快速部署。相当于跑 00_push_code.sh。")
@@ -222,11 +240,16 @@ def main() -> int:
         log.info(f"校验通过: {len(raw)} 条")
         filtered = _filter_entries(raw, categories, max_shots,
                                    skip_bad_quality=not args.include_bad_quality,
-                                   skip_landscape=not args.include_landscape)
-        log.info(f"筛选后:   {len(filtered)} 条  "
-                 f"(categories={categories or 'all'}, movies={movies or 'all'}, "
-                 f"max={max_shots or '∞'}, skip_bad_quality={not args.include_bad_quality}, "
-                 f"skip_landscape={not args.include_landscape})")
+                                   skip_landscape=not args.include_landscape,
+                                   min_duration_sec=args.min_duration,
+                                   max_duration_sec=args.max_duration)
+        log.info(
+            f"筛选后:   {len(filtered)} 条  "
+            f"(categories={categories or 'all'}, movies={movies or 'all'}, "
+            f"max={max_shots or '∞'}, skip_bad_quality={not args.include_bad_quality}, "
+            f"skip_landscape={not args.include_landscape}, "
+            f"duration=[{args.min_duration or '−∞'}, {args.max_duration or '∞'}])"
+        )
 
         if not filtered:
             log.warning("没有符合条件的 shot，退出。")

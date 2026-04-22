@@ -60,6 +60,10 @@ def _build_run_all_cmd(
         cmd += ["--include-landscape"]
     if fp.max_shots:
         cmd += ["--max-shots", str(fp.max_shots)]
+    if fp.min_duration_sec is not None:
+        cmd += ["--min-duration", str(fp.min_duration_sec)]
+    if fp.max_duration_sec is not None:
+        cmd += ["--max-duration", str(fp.max_duration_sec)]
     return cmd
 
 

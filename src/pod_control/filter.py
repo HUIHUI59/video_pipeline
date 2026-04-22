@@ -80,6 +80,8 @@ def filter_movies(
         max_shots=params.max_shots,
         skip_bad_quality=params.skip_bad_quality,
         skip_landscape=params.skip_landscape,
+        min_duration_sec=params.min_duration_sec,
+        max_duration_sec=params.max_duration_sec,
     )
     return [e.model_dump() for _movie, e in filtered]
 

@@ -59,6 +59,16 @@
                 <label>max_shots</label>
                 <input type="number" id="max-shots" min="1" placeholder="null (all)" />
               </div>
+              <div class="field">
+                <label>duration ≥ (sec)</label>
+                <input type="number" id="min-duration" min="0" step="0.1"
+                       placeholder="no min" />
+              </div>
+              <div class="field">
+                <label>duration ≤ (sec)</label>
+                <input type="number" id="max-duration" min="0" step="0.1"
+                       placeholder="no max" />
+              </div>
               <button class="btn-primary" id="apply-filter">Apply</button>
               <button class="btn-secondary" id="random-sample">Random sample 10</button>
               <span id="match-count" class="muted"></span>

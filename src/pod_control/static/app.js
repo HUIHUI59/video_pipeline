@@ -76,6 +76,11 @@ function renderCategoryChecks() {
   }
 }
 
+function _floatOrNull(id) {
+  const v = $(id).value.trim();
+  return v ? parseFloat(v) : null;
+}
+
 function currentFilterQuery() {
   const cats = $$("#category-checks input:checked").map((el) => el.value);
   const params = new URLSearchParams();
@@ -84,6 +89,10 @@ function currentFilterQuery() {
   params.set("skip_landscape", $("#skip-landscape").checked);
   const max = $("#max-shots").value.trim();
   if (max) params.set("max_shots", max);
+  const minDur = _floatOrNull("#min-duration");
+  if (minDur !== null) params.set("min_duration_sec", minDur);
+  const maxDur = _floatOrNull("#max-duration");
+  if (maxDur !== null) params.set("max_duration_sec", maxDur);
   params.set("page", state.page);
   params.set("page_size", state.pageSize);
   return params;
@@ -97,6 +106,8 @@ function currentFilterParams() {
     max_shots: $("#max-shots").value.trim()
       ? parseInt($("#max-shots").value, 10)
       : null,
+    min_duration_sec: _floatOrNull("#min-duration"),
+    max_duration_sec: _floatOrNull("#max-duration"),
   };
 }
 

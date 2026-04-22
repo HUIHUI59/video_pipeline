@@ -40,6 +40,8 @@ class FilterParams(BaseModel):
     skip_bad_quality: bool = True
     skip_landscape: bool = True
     max_shots: int | None = None
+    min_duration_sec: float | None = None
+    max_duration_sec: float | None = None
 
 
 class Batch(BaseModel):

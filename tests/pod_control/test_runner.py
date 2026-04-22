@@ -84,6 +84,30 @@ def test_build_run_all_cmd_preset_and_include_flags(tmp_path):
     assert "--include-landscape" in cmd
 
 
+def test_build_run_all_cmd_forwards_duration_bounds(tmp_path):
+    b = _batch(filter_params=FilterParams(
+        min_duration_sec=2.5, max_duration_sec=10.0,
+    ))
+    cmd = _build_run_all_cmd(
+        _pod(), b, preset_path=None,
+        run_all_script=tmp_path / "r.sh",
+    )
+    assert "--min-duration" in cmd
+    assert cmd[cmd.index("--min-duration") + 1] == "2.5"
+    assert "--max-duration" in cmd
+    assert cmd[cmd.index("--max-duration") + 1] == "10.0"
+
+
+def test_build_run_all_cmd_omits_duration_when_none(tmp_path):
+    b = _batch()
+    cmd = _build_run_all_cmd(
+        _pod(), b, preset_path=None,
+        run_all_script=tmp_path / "r.sh",
+    )
+    assert "--min-duration" not in cmd
+    assert "--max-duration" not in cmd
+
+
 # ── Launch ----------------------------------------------------------
 
 

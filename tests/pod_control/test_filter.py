@@ -139,6 +139,39 @@ def test_filter_movie_missing_manifest_returns_empty(tmp_path):
     assert filter_movie(tmp_path, "Nope", FilterParams()) == []
 
 
+def test_filter_movie_respects_min_duration(tmp_path):
+    _write_manifest(tmp_path, "M1", [
+        _manifest_entry(1, duration=1.5),
+        _manifest_entry(2, duration=3.0),
+        _manifest_entry(3, duration=6.0),
+    ])
+    fp = FilterParams(min_duration_sec=3.0)
+    out = filter_movie(tmp_path, "M1", fp)
+    assert sorted(e["duration_sec"] for e in out) == [3.0, 6.0]
+
+
+def test_filter_movie_respects_max_duration(tmp_path):
+    _write_manifest(tmp_path, "M1", [
+        _manifest_entry(1, duration=1.5),
+        _manifest_entry(2, duration=3.0),
+        _manifest_entry(3, duration=6.0),
+    ])
+    fp = FilterParams(max_duration_sec=3.0)
+    out = filter_movie(tmp_path, "M1", fp)
+    assert sorted(e["duration_sec"] for e in out) == [1.5, 3.0]
+
+
+def test_filter_movie_duration_range_is_closed_interval(tmp_path):
+    """[min, max] both inclusive — a shot exactly at the bound stays in."""
+    _write_manifest(tmp_path, "M1", [
+        _manifest_entry(1, duration=2.0),
+        _manifest_entry(2, duration=5.0),
+    ])
+    fp = FilterParams(min_duration_sec=2.0, max_duration_sec=5.0)
+    out = filter_movie(tmp_path, "M1", fp)
+    assert len(out) == 2
+
+
 # ── paginate ---------------------------------------------------------
 
 

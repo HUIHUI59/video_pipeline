@@ -244,6 +244,8 @@ def create_app(
         skip_bad_quality: bool = True,
         skip_landscape: bool = True,
         max_shots: int | None = None,
+        min_duration_sec: float | None = None,
+        max_duration_sec: float | None = None,
         page: int = 1,
         page_size: int = 20,
         sample_seed: int | None = None,
@@ -259,6 +261,8 @@ def create_app(
             skip_bad_quality=skip_bad_quality,
             skip_landscape=skip_landscape,
             max_shots=max_shots,
+            min_duration_sec=min_duration_sec,
+            max_duration_sec=max_duration_sec,
         )
         # Aggregate path movie + optional extras (client can pass '' to just
         # exercise the path segment as a single-movie preview).
