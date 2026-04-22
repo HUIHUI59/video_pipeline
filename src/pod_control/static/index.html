@@ -19,7 +19,61 @@
 
   <main>
     <section id="tab-prepare" class="tab active">
-      <p class="placeholder">Prepare — M3 里实现 (movie picker / filter / preview / batches)</p>
+      <div class="prepare-layout">
+        <aside class="prepare-side">
+          <h2>Movies</h2>
+          <ul id="movie-list" class="list"></ul>
+
+          <h2>Saved batches</h2>
+          <ul id="batch-list" class="list"></ul>
+        </aside>
+
+        <div class="prepare-main">
+          <section class="panel" id="filter-panel" hidden>
+            <h2>Filter · <span id="current-movie"></span></h2>
+            <div class="filter-form">
+              <label>
+                categories:
+                <span id="category-checks"></span>
+              </label>
+              <label>
+                <input type="checkbox" id="skip-bad-quality" checked />
+                skip_bad_quality
+              </label>
+              <label>
+                <input type="checkbox" id="skip-landscape" checked />
+                skip_landscape
+              </label>
+              <label>
+                max_shots:
+                <input type="number" id="max-shots" min="1" placeholder="null" />
+              </label>
+              <button id="apply-filter">Apply</button>
+              <button id="random-sample">Random sample 10</button>
+              <span id="match-count" class="muted"></span>
+            </div>
+
+            <div class="preview-grid" id="preview-grid"></div>
+
+            <div class="pager">
+              <button id="page-prev">Prev</button>
+              <span id="page-info"></span>
+              <button id="page-next">Next</button>
+            </div>
+
+            <form id="save-batch-form" class="save-batch">
+              <input type="text" id="batch-name"
+                     placeholder="batch name (slug)" required />
+              <button type="submit">Save batch</button>
+              <span id="save-batch-msg" class="muted"></span>
+            </form>
+          </section>
+
+          <section class="panel" id="empty-hint">
+            <p class="placeholder">左侧选一个 movie 开始准备 batch。</p>
+          </section>
+        </div>
+      </div>
     </section>
     <section id="tab-pods" class="tab">
       <p class="placeholder">Pods — M4 里实现 (SSH profiles + test connect)</p>
