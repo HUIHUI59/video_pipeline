@@ -86,112 +86,124 @@ def _fresh_validator():
     )
 
 
+# ── CHECK 15 / 16（pre-restore 的 spec 扩展，已回退到 zip baseline）──
+# 这 4 个测试覆盖的功能在 spec 的 zip baseline 里不存在 —— 它们是 commit
+# 2084a44 把 pipeline 逻辑塞进了 spec validate_body_analysis.py 里。spec
+# 已回退到 zip 版本 (2026-04-22)，所以这些 test 无对象可测。
+# C2 / C3 / C7 完成后，pod_runner 会在 spec ShotValidator 之后追加同等行为
+# 的 _pod_extra_checks()，到时候在新文件里重写覆盖（断言 pod 端，不是 spec 端）。
+import pytest
+
+_DELIVERY_V1_RESTORED = pytest.mark.skip(
+    reason="CHECK15/16 是 pre-restore 的 spec 扩展，spec 已恢复 zip baseline；"
+           "等 C2/C3/C7 把同等行为搬到 src/runpod/_pod_extra_checks 后，在新 test 里覆盖"
+)
+
+
+@_DELIVERY_V1_RESTORED
 def test_check15_solo_contact_mismatch_is_error():
-    val = _fresh_validator()
-    shot = {
-        "shot_id": "t_solo_mismatch",
-        "persons": [],
-        "quality_flags": {},
-        "interaction": {"count": "solo", "contact": "sustained", "relation": "parallel"},
-    }
-    errors, _, _ = val.validate(shot)
-    checks = [e["check"] for e in errors]
-    assert "interaction_solo_contact_mismatch" in checks
+    pass
 
 
+@_DELIVERY_V1_RESTORED
 def test_check15_solo_none_is_ok():
-    val = _fresh_validator()
-    shot = {
-        "shot_id": "t_solo_ok",
-        "persons": [],
-        "quality_flags": {},
-        "interaction": {"count": "solo", "contact": "none", "relation": "parallel"},
-    }
-    errors, _, _ = val.validate(shot)
-    checks = [e["check"] for e in errors]
-    assert "interaction_solo_contact_mismatch" not in checks
+    pass
 
 
+@_DELIVERY_V1_RESTORED
 def test_check16_asymmetric_is_warning():
-    val = _fresh_validator()
-    shot = {
-        "shot_id": "t_asym", "quality_flags": {},
-        "persons": [
-            {"person_index": 0, "body_analysis": {"interaction": {
-                "count": "dyadic", "contact": "sustained", "relation": "parallel",
-                "interacts_with_person_index": [1]}}},
-            {"person_index": 1, "body_analysis": {"interaction": {
-                "count": "dyadic", "contact": "sustained", "relation": "parallel",
-                "interacts_with_person_index": []}}},
-        ],
-    }
-    _, warnings, _ = val.validate(shot)
-    checks = [w["check"] for w in warnings]
-    assert "interaction_asymmetric" in checks
+    pass
 
 
+@_DELIVERY_V1_RESTORED
 def test_check16_missing_peer_is_warning():
-    val = _fresh_validator()
-    shot = {
-        "shot_id": "t_missing", "quality_flags": {},
-        "persons": [{"person_index": 0, "body_analysis": {"interaction": {
-            "count": "dyadic", "contact": "none", "relation": "parallel",
-            "interacts_with_person_index": [99]}}}],
-    }
-    _, warnings, _ = val.validate(shot)
-    checks = [w["check"] for w in warnings]
-    assert "interaction_references_missing_person" in checks
+    pass
 
 
-# ── Normalizer: camera_terms 扩散 ─────────────────────────────────
-
+@pytest.mark.skip(
+    reason="caption camera-term stripping 是 pre-restore 的 spec 扩展，spec 已恢复 "
+           "zip baseline；C3 会把同等行为放到 post_normalize.strip_camera_terms_in_captions 里"
+)
 def test_normalize_shot_strips_camera_terms_in_captions():
-    from normalize_tags import TagNormalizer
-    base = _ROOT / "docs" / "labelingStandards" / "external_delivery_v1" / "docs"
-    norm = TagNormalizer(base / "motion_synonyms.yaml", base / "motion_taxonomy.yaml")
-
-    shot = {
-        "shot_id": "t_cam_strip",
-        "persons": [{
-            "person_index": 0,
-            "face_analysis": {
-                "expression_caption":
-                    "In a close-up, his eyes widen slightly",
-                "alternative_captions": {
-                    "direct":      "A close-up of his widened eyes",
-                    "literary":    "The close-up held on his face",
-                    "direction":   "hold the close-up steady",
-                    "situational": "as the camera comes to a close-up",
-                },
-            },
-            "body_analysis": {
-                "motion_caption": "He leans forward in a wide shot frame",
-            },
-        }],
-        "shot_context": {
-            "shot_motion_summary": "Slow dolly zoom into a medium shot",
-        },
-    }
-    out, changes = norm.normalize_shot(shot)
-    assert changes >= 4, f"expected multiple camera-term strips, got {changes}"
-    fa = out["persons"][0]["face_analysis"]
-    assert "close-up" not in fa["expression_caption"].lower()
-    for v in fa["alternative_captions"].values():
-        assert "close-up" not in v.lower()
-    assert "wide shot" not in out["persons"][0]["body_analysis"]["motion_caption"].lower()
+    pass
 
 
 # ── ShotLabel self-test：delivery_v1 9 个官方示例 ─────────────────
+# C1 (2026-04-22) 加了 visible_body_parts ⊆ FRAMING_MAX_PARTS 强约束；
+# spec 自带的 1 个 example (dominant_action_halfbody.json) 违反了 spec 自己的
+# CHECK 3，所以 model_validate 会拒绝它。这是 spec 内部不一致，已记录在
+# schemas._KNOWN_SPEC_INCONSISTENT_EXAMPLES。
 
 def test_shotlabel_validates_all_delivery_examples():
-    from schemas import ShotLabel
+    from schemas import ShotLabel, _KNOWN_SPEC_INCONSISTENT_EXAMPLES
     root = _ROOT / "docs" / "labelingStandards" / "examples"
     if not root.exists():
         return  # 示例不在本机时跳过
     files = sorted(root.glob("*.json"))
     assert files, "delivery_v1 examples missing"
+    failed = []
     for f in files:
-        ShotLabel.model_validate(json.loads(f.read_text(encoding="utf-8")))
+        try:
+            ShotLabel.model_validate(json.loads(f.read_text(encoding="utf-8")))
+        except Exception as e:
+            if f.name not in _KNOWN_SPEC_INCONSISTENT_EXAMPLES:
+                failed.append((f.name, str(e)))
+    assert not failed, (
+        f"unexpected validation failures (not in _KNOWN_SPEC_INCONSISTENT_EXAMPLES): "
+        f"{failed}"
+    )
+
+
+# ── C1: BodyAnalysis FRAMING_MAX_PARTS 强约束 (2026-04-22) ────────
+
+def test_body_analysis_visible_parts_strict_within_frame():
+    """delivery_v1 § 5.1: visible_body_parts ⊆ FRAMING_MAX_PARTS[shot_frame_of_body]."""
+    from schemas import BodyAnalysis
+    BodyAnalysis.model_validate({
+        "body_clearly_visible": True,
+        "shot_frame_of_body": "bust",
+        "visible_body_parts": ["head", "neck", "shoulders"],
+    })  # passes
+
+
+def test_body_analysis_rejects_parts_outside_frame():
+    """bust 里有 hips → ValueError."""
+    from schemas import BodyAnalysis
+    with pytest.raises(Exception) as exc_info:
+        BodyAnalysis.model_validate({
+            "body_clearly_visible": True,
+            "shot_frame_of_body": "bust",
+            "visible_body_parts": ["head", "hips"],
+        })
+    assert "hips" in str(exc_info.value)
+    assert "bust" in str(exc_info.value)
+
+
+def test_body_analysis_no_visible_parts_passes():
+    """visible_body_parts=None / [] 不触发约束（motion_confidence<0.3 时 null 行为）."""
+    from schemas import BodyAnalysis
+    BodyAnalysis.model_validate({
+        "body_clearly_visible": True,
+        "shot_frame_of_body": "bust",
+        "visible_body_parts": None,
+    })
+    BodyAnalysis.model_validate({
+        "body_clearly_visible": True,
+        "shot_frame_of_body": "bust",
+        "visible_body_parts": [],
+    })
+
+
+def test_framing_max_parts_dict_matches_spec_intent():
+    """sanity check: full_body 包含 feet，bust 不包含 feet."""
+    from schemas import FRAMING_MAX_PARTS
+    assert "feet" in FRAMING_MAX_PARTS["full_body"]
+    assert "feet" not in FRAMING_MAX_PARTS["bust"]
+    assert "head" in FRAMING_MAX_PARTS["close_face"]
+    assert FRAMING_MAX_PARTS["close_face"] <= FRAMING_MAX_PARTS["bust"]
+    assert FRAMING_MAX_PARTS["bust"] <= FRAMING_MAX_PARTS["half_body"]
+    assert FRAMING_MAX_PARTS["half_body"] <= FRAMING_MAX_PARTS["three_quarter"]
+    assert FRAMING_MAX_PARTS["three_quarter"] <= FRAMING_MAX_PARTS["full_body"]
 
 
 # ── 无 pytest 时的独立运行入口 ────────────────────────────────────
