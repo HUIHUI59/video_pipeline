@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>pod_control</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <header>
+    <h1>Stage 5 Pod Control</h1>
+    <nav>
+      <button data-tab="prepare" class="active">Prepare</button>
+      <button data-tab="pods">Pods</button>
+      <button data-tab="run">Run</button>
+      <button data-tab="monitor">Monitor</button>
+    </nav>
+  </header>
+
+  <main>
+    <section id="tab-prepare" class="tab active">
+      <p class="placeholder">Prepare — M3 里实现 (movie picker / filter / preview / batches)</p>
+    </section>
+    <section id="tab-pods" class="tab">
+      <p class="placeholder">Pods — M4 里实现 (SSH profiles + test connect)</p>
+    </section>
+    <section id="tab-run" class="tab">
+      <p class="placeholder">Run — M5 里实现 (launcher + kill button)</p>
+    </section>
+    <section id="tab-monitor" class="tab">
+      <p class="placeholder">Monitor — M6 里实现 (log tail + checkpoint counter)</p>
+    </section>
+  </main>
+
+  <footer>
+    <span id="health-status">checking…</span>
+    <span id="version"></span>
+  </footer>
+
+  <script type="module" src="/static/app.js"></script>
+</body>
+</html>
