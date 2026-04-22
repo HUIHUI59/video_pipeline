@@ -605,5 +605,169 @@ class TestPostFixCompliance(unittest.TestCase):
         self.assertIs(post_fix_compliance(obj), obj)
 
 
+class TestStripCameraTermsInCaptions(unittest.TestCase):
+    """C3 (2026-04-22): port of removed spec normalize_tags caption stripping."""
+
+    def test_strips_close_up_from_face_caption(self):
+        from src.runpod.post_normalize import strip_camera_terms_in_captions
+        obj = {"persons": [{
+            "face_analysis": {
+                "expression_caption": "In a close-up, his eyes widen.",
+            },
+        }]}
+        n = strip_camera_terms_in_captions(obj)
+        self.assertGreater(n, 0)
+        cap = obj["persons"][0]["face_analysis"]["expression_caption"]
+        self.assertNotIn("close-up", cap.lower())
+
+    def test_strips_alt_captions(self):
+        from src.runpod.post_normalize import strip_camera_terms_in_captions
+        obj = {"persons": [{
+            "face_analysis": {
+                "alternative_captions": {
+                    "direct":      "A wide shot of his face",
+                    "literary":    "the wide-angle held on him",
+                    "direction":   "hold the close-up steady",
+                    "situational": "as the camera does a slow pan",
+                },
+            },
+        }]}
+        n = strip_camera_terms_in_captions(obj)
+        self.assertGreater(n, 0)
+        for v in obj["persons"][0]["face_analysis"]["alternative_captions"].values():
+            self.assertNotIn("close-up", v.lower())
+
+    def test_strips_body_motion_caption(self):
+        from src.runpod.post_normalize import strip_camera_terms_in_captions
+        obj = {"persons": [{
+            "body_analysis": {
+                "motion_caption": "He leans in during the close-up.",
+            },
+        }]}
+        n = strip_camera_terms_in_captions(obj)
+        self.assertGreater(n, 0)
+        self.assertNotIn(
+            "close-up",
+            obj["persons"][0]["body_analysis"]["motion_caption"].lower(),
+        )
+
+    def test_strips_shot_context_summaries(self):
+        from src.runpod.post_normalize import strip_camera_terms_in_captions
+        obj = {"shot_context": {
+            "shot_emotion_summary": "Tense atmosphere held in a close-up.",
+            "shot_motion_summary":  "Static frame with a slow pan toward end.",
+        }}
+        n = strip_camera_terms_in_captions(obj)
+        self.assertGreater(n, 0)
+
+    def test_no_camera_term_no_change(self):
+        from src.runpod.post_normalize import strip_camera_terms_in_captions
+        obj = {"persons": [{
+            "face_analysis": {
+                "expression_caption": "He looks at her with quiet sadness.",
+            },
+        }]}
+        n = strip_camera_terms_in_captions(obj)
+        self.assertEqual(n, 0)
+
+    def test_word_boundary_does_not_strip_substrings(self):
+        """'closeness' must not be touched by 'close-up' rule."""
+        from src.runpod.post_normalize import strip_camera_terms_in_captions
+        obj = {"persons": [{
+            "face_analysis": {
+                "expression_caption": "Their closeness is palpable.",
+            },
+        }]}
+        strip_camera_terms_in_captions(obj)
+        self.assertIn(
+            "closeness",
+            obj["persons"][0]["face_analysis"]["expression_caption"],
+        )
+
+    def test_missing_persons_no_crash(self):
+        from src.runpod.post_normalize import strip_camera_terms_in_captions
+        self.assertEqual(strip_camera_terms_in_captions({}), 0)
+
+
+class TestEnforceAltcapNullConsistency(unittest.TestCase):
+    """C6 (2026-04-22): face/body_clearly_visible vs all-null alt_captions."""
+
+    def test_face_visible_but_all_alt_caps_null_downgrades_gate(self):
+        from src.runpod.post_normalize import enforce_altcap_null_consistency
+        obj = {"persons": [{
+            "face_analysis": {
+                "face_clearly_visible": True,
+                "alternative_captions": {
+                    "direct": None, "literary": None,
+                    "direction": None, "situational": None,
+                },
+            },
+        }]}
+        n = enforce_altcap_null_consistency(obj)
+        self.assertEqual(n, 1)
+        self.assertFalse(obj["persons"][0]["face_analysis"]["face_clearly_visible"])
+
+    def test_face_visible_with_one_caption_kept(self):
+        from src.runpod.post_normalize import enforce_altcap_null_consistency
+        obj = {"persons": [{
+            "face_analysis": {
+                "face_clearly_visible": True,
+                "alternative_captions": {
+                    "direct": "He smiles.",
+                    "literary": None, "direction": None, "situational": None,
+                },
+            },
+        }]}
+        n = enforce_altcap_null_consistency(obj)
+        self.assertEqual(n, 0)
+        self.assertTrue(obj["persons"][0]["face_analysis"]["face_clearly_visible"])
+
+    def test_face_not_visible_unaffected(self):
+        from src.runpod.post_normalize import enforce_altcap_null_consistency
+        obj = {"persons": [{
+            "face_analysis": {
+                "face_clearly_visible": False,
+                "alternative_captions": None,
+            },
+        }]}
+        self.assertEqual(enforce_altcap_null_consistency(obj), 0)
+
+    def test_body_visible_but_all_alt_caps_null_downgrades_gate(self):
+        from src.runpod.post_normalize import enforce_altcap_null_consistency
+        obj = {"persons": [{
+            "body_analysis": {
+                "body_clearly_visible": True,
+                "alternative_captions": {
+                    "direct": None, "literary": None,
+                    "direction": None, "situational": None,
+                },
+            },
+        }]}
+        n = enforce_altcap_null_consistency(obj)
+        self.assertEqual(n, 1)
+        self.assertFalse(obj["persons"][0]["body_analysis"]["body_clearly_visible"])
+
+    def test_no_alt_captions_dict_at_all_treated_as_all_null(self):
+        from src.runpod.post_normalize import enforce_altcap_null_consistency
+        obj = {"persons": [{
+            "face_analysis": {"face_clearly_visible": True},
+        }]}
+        n = enforce_altcap_null_consistency(obj)
+        self.assertEqual(n, 1)
+        self.assertFalse(obj["persons"][0]["face_analysis"]["face_clearly_visible"])
+
+    def test_missing_persons_no_crash(self):
+        from src.runpod.post_normalize import enforce_altcap_null_consistency
+        self.assertEqual(enforce_altcap_null_consistency({}), 0)
+
+
+class TestFixAllAlias(unittest.TestCase):
+    """fix_all is alias of post_fix_compliance for forward compatibility."""
+
+    def test_fix_all_is_post_fix_compliance(self):
+        from src.runpod.post_normalize import fix_all, post_fix_compliance
+        self.assertIs(fix_all, post_fix_compliance)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -28,6 +28,19 @@ Fixes applied:
        the camera, not the subject's action. See Pod log 2026-04-20
        05:40 shot_0036 for ``tempo='static'`` → ``camera_term_in_action``
        hard error.
+  E. ``strip_camera_terms_in_captions`` (C3, 2026-04-22):
+     port from removed spec normalize_tags extension. spec
+     ``normalize_tags.py`` (zip baseline) only strips camera terms from
+     ``body_analysis.action_primary``. delivery_v1 § 5.3 expects camera
+     terms also out of free-text captions / summaries. Pod-side here.
+  F. ``enforce_altcap_null_consistency`` (C6, 2026-04-22):
+     spec § 6.3: when ``face_clearly_visible=true`` (or
+     ``body_clearly_visible=true``), the 4 ``alternative_captions``
+     sub-fields cannot all be null — VLM either skipped the gate
+     (= false, all null) or filled the captions (= true, ≥ 1 non-null).
+     Inconsistent cases are coerced to consistency (gate kept, captions
+     left as VLM provided; if all 4 are null but gate=true, downgrade
+     gate to false).
 
 The ``VALID_*`` sets mirror ``src/runpod/schemas.py:47-51`` — if the
 Literal enums in schemas.py ever change, update this file too (no
@@ -503,25 +516,182 @@ def fix_action_quality_camera_terms(obj: dict[str, Any]) -> int:
     return fixes
 
 
+# ── E. strip_camera_terms_in_captions (C3, 2026-04-22) ─────────────
+# Loaded once on first call; key is yaml path so multiple calls with
+# different spec snapshots keep their own list.
+_CAMERA_TERMS_CACHE: dict[str, frozenset[str]] = {}
+
+
+def _load_camera_terms(synonyms_yaml_path: str | None = None) -> frozenset[str]:
+    """Return the spec's camera_terms_forbidden list as a frozenset."""
+    if synonyms_yaml_path is None:
+        from pathlib import Path
+        synonyms_yaml_path = str(
+            Path(__file__).resolve().parents[2]
+            / "docs" / "labelingStandards" / "external_delivery_v1"
+            / "docs" / "motion_synonyms.yaml"
+        )
+    if synonyms_yaml_path in _CAMERA_TERMS_CACHE:
+        return _CAMERA_TERMS_CACHE[synonyms_yaml_path]
+    try:
+        import yaml
+        from pathlib import Path
+        data = yaml.safe_load(Path(synonyms_yaml_path).read_text(encoding="utf-8"))
+        terms = data.get("camera_terms_forbidden") or []
+        # Normalize to lowercase, strip
+        out = frozenset(t.strip().lower() for t in terms if t and t.strip())
+    except Exception:
+        out = frozenset()
+    _CAMERA_TERMS_CACHE[synonyms_yaml_path] = out
+    return out
+
+
+_CAPTION_FIELDS_FACE = ["expression_caption"]
+_CAPTION_FIELDS_BODY = ["motion_caption", "gesture_detail"]
+_CAPTION_ALT_KEYS    = ["direct", "literary", "direction", "situational"]
+_UPPER_BODY_DETAIL_FIELDS = ["head", "neck", "shoulders", "arms", "hands", "torso"]
+_SHOT_CONTEXT_FIELDS = ["shot_emotion_summary", "shot_motion_summary"]
+_SCENE_CONTEXT_FIELDS = ["visible_setting", "narrative_situation"]
+
+
+def _strip_camera_terms_from_text(text: str, terms: frozenset[str]) -> tuple[str, bool]:
+    """Word-boundary strip of camera terms from one string. Returns (new, changed)."""
+    if not text or not isinstance(text, str) or not terms:
+        return text, False
+    import re
+    out = text
+    changed = False
+    for term in terms:
+        pattern = re.compile(
+            r"(?i)(?<![A-Za-z0-9])" + re.escape(term) + r"(?![A-Za-z0-9])"
+        )
+        new_out = pattern.sub("", out)
+        if new_out != out:
+            changed = True
+            out = new_out
+    if changed:
+        out = re.sub(r"\s{2,}", " ", out)
+        out = re.sub(r"\s*,\s*,", ",", out)
+        out = re.sub(r"^[,\s]+|[,\s]+$", "", out)
+    return out, changed
+
+
+def strip_camera_terms_in_captions(obj: dict[str, Any]) -> int:
+    """Strip spec camera terms from all free-text caption fields.
+
+    Replaces the removed spec-side normalize_tags expansion (per RESTORE_LOG
+    2026-04-22). Spec normalize_tags only handles body.action_primary.
+    """
+    terms = _load_camera_terms()
+    if not terms:
+        return 0
+    fixes = 0
+
+    def _strip_dict_text(d: Any, keys: list[str]) -> int:
+        if not isinstance(d, dict):
+            return 0
+        c = 0
+        for k in keys:
+            v = d.get(k)
+            if not isinstance(v, str):
+                continue
+            new_v, changed = _strip_camera_terms_from_text(v, terms)
+            if changed:
+                d[k] = new_v
+                c += 1
+        return c
+
+    # shot_context summaries
+    sc = obj.get("shot_context")
+    if isinstance(sc, dict):
+        fixes += _strip_dict_text(sc, _SHOT_CONTEXT_FIELDS)
+        fixes += _strip_dict_text(sc.get("scene_context"), _SCENE_CONTEXT_FIELDS)
+
+    for person in obj.get("persons") or []:
+        if not isinstance(person, dict):
+            continue
+        fa = person.get("face_analysis")
+        if isinstance(fa, dict):
+            fixes += _strip_dict_text(fa, _CAPTION_FIELDS_FACE)
+            fixes += _strip_dict_text(fa.get("alternative_captions"), _CAPTION_ALT_KEYS)
+        ba = person.get("body_analysis")
+        if isinstance(ba, dict):
+            fixes += _strip_dict_text(ba, _CAPTION_FIELDS_BODY)
+            fixes += _strip_dict_text(ba.get("alternative_captions"), _CAPTION_ALT_KEYS)
+            fixes += _strip_dict_text(ba.get("upper_body_detail"), _UPPER_BODY_DETAIL_FIELDS)
+
+    return fixes
+
+
+# ── F. enforce_altcap_null_consistency (C6, 2026-04-22) ─────────────
+
+
+def _all_alt_caps_null(alt: Any) -> bool:
+    """Check if all 4 alt_captions sub-fields are null/missing."""
+    if not isinstance(alt, dict):
+        return True  # absent → treated as all-null
+    return all(alt.get(k) is None for k in _CAPTION_ALT_KEYS)
+
+
+def enforce_altcap_null_consistency(obj: dict[str, Any]) -> int:
+    """Spec § 6.3: gate=true ⇔ at least one alt_caption non-null.
+
+    If face_clearly_visible=true but all 4 alt_captions are null
+    (= VLM contradicted itself), downgrade gate to false. Same for
+    body_clearly_visible.
+    """
+    fixes = 0
+    for person in obj.get("persons") or []:
+        if not isinstance(person, dict):
+            continue
+        fa = person.get("face_analysis")
+        if isinstance(fa, dict) and fa.get("face_clearly_visible") is True:
+            if _all_alt_caps_null(fa.get("alternative_captions")):
+                fa["face_clearly_visible"] = False
+                fixes += 1
+        ba = person.get("body_analysis")
+        if isinstance(ba, dict) and ba.get("body_clearly_visible") is True:
+            if _all_alt_caps_null(ba.get("alternative_captions")):
+                ba["body_clearly_visible"] = False
+                fixes += 1
+    return fixes
+
+
 def post_fix_compliance(
     obj: dict[str, Any],
     log: logging.Logger | None = None,
 ) -> dict[str, Any]:
     """Apply all delivery_v1 strict-compliance fixups in-place.
 
-    Returns the same dict for chaining.
+    Returns the same dict for chaining. Order matters:
+      1. interaction enum coercion
+      2. face gate injection
+      3. facial attribute bool coercion
+      4. action_quality camera term cleanup
+      5. emotion synonym remap
+      6. (C3) camera term stripping in free-text captions
+      7. (C6) altcap-null consistency (run last; depends on prior fixes)
     """
     n_inter   = fix_interaction(obj)
     n_gate    = fix_face_clearly_visible(obj)
     n_bool    = fix_facial_attribute_bools(obj)
     n_cam     = fix_action_quality_camera_terms(obj)
     n_emotion = fix_primary_emotion(obj)
-    total = n_inter + n_gate + n_bool + n_cam + n_emotion
+    n_capcam  = strip_camera_terms_in_captions(obj)
+    n_altcons = enforce_altcap_null_consistency(obj)
+    total = n_inter + n_gate + n_bool + n_cam + n_emotion + n_capcam + n_altcons
     if log is not None and total > 0:
         shot_id = obj.get("shot_id", "?")
         log.info(
             f"[post-fix] {shot_id}: interaction={n_inter} "
             f"face_gate={n_gate} face_bools={n_bool} "
-            f"action_camera={n_cam} emotion={n_emotion} total={total}"
+            f"action_camera={n_cam} emotion={n_emotion} "
+            f"caption_camera={n_capcam} altcap_consistency={n_altcons} "
+            f"total={total}"
         )
     return obj
+
+
+# ── alias for forward compatibility (Phase C plan named it fix_all) ─
+
+fix_all = post_fix_compliance
