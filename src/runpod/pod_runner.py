@@ -657,15 +657,18 @@ def main() -> int:
                     f" max_tokens={max_tokens} 给足余量。")
         return SamplingParams(**base_kwargs)
 
-    # 三轮各自的 output 预算：
-    #   - Round 1 （body_analysis per person）：3 人 shot ~5-6K token
-    #   - Round 2 （face_analysis only，按 person 对齐）：3 人 ~3-4K token
-    #   - Round 3 （shot_context + interaction + quality + usability）：≤2K token
+    # 三轮各自的 output 预算（delivery_v1 spec 字段填满时的观测值）：
+    #   - Round 1 （body_analysis per person）：spec 规定 motion_caption 50-180 words
+    #     + 4 个 alternative_captions + upper_body_detail 7 字段 + gesture_detail
+    #     一人约 1.5-3K tok；给 8K = 2-3x buffer 防 truncation
+    #   - Round 2 （人发现 + face_analysis 全员）：per-person ~1.5K tok × 4 人上限
+    #     + visible_person_count_total → 6K 兼容 4 人 + 少量其它字段
+    #   - Round 3 （shot_context + interaction + quality + usability）：≤1-2K token
+    #     spec 字段不多，给 4K 够用
+    # 所有默认可通过 configs/runpod.*.yaml 的 sampling.max_tokens_round{1,2,3} 覆盖。
     max_tokens_r1 = int(samp.get("max_tokens_round1", 8192))
     max_tokens_r2 = int(samp.get("max_tokens_round2", 6144))
     max_tokens_r3 = int(samp.get("max_tokens_round3", 4096))
-    # per-person 每人 body_analysis 约 3K tok，所以 max_tokens_r1 用户设 10240 也
-    # 够余量。R2 现在同时做人发现 + face_analysis，schema 和 prompt 略胖。
     sampling_r1_person = _build_sampling(
         schema_r1_person, max_tokens_r1, "Round1-body-per-person")
     sampling_r2 = _build_sampling(schema_r2, max_tokens_r2, "Round2-persons+face")
