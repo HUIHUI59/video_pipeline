@@ -321,6 +321,13 @@ def main() -> int:
 
     manifest_path = workspace / "manifest.jsonl"
     clips_root    = workspace / "clips"
+    # Pod-internal staging dir. Layout: out_root/<movie>/<shot>.json
+    # download.py rsyncs out_root/ contents into the user's local_labels_root,
+    # giving the downstream-visible layout <labels_root>/<movie>/<shot>.json —
+    # which matches the spec's "9.3 Output layout" (deliverable/movies/<name>/
+    # shots/<shot>.json) once shot-granular per-file writes are aggregated.
+    # The pod-side name "output/" is legacy; spec-facing consumers see the
+    # flattened <labels_root>/<movie>/ layout after download.
     out_root      = workspace / "output"
     out_root.mkdir(parents=True, exist_ok=True)
 
