@@ -937,6 +937,17 @@ def main() -> int:
         n_persons = len(r2_persons)
 
         # ── Crowd shot detection ─────────────────────────────────
+        # NOTE: this is a POD-SIDE RUNTIME POLICY, not a delivery_v1 spec
+        # requirement. Spec is silent on crowd handling. We skip R1 for
+        # high-person-count shots because (a) running R1 per-person on 10+
+        # people would explode token budget and inference time, and (b)
+        # background extras add noise without per-person body annotation
+        # value. The output stays delivery_v1-compliant (R2 face + R3 scene
+        # are written; persons[] is written with body_analysis=null and
+        # exclusion_reason="crowd_shot_excluded (N persons)" for downstream
+        # filtering). Toggle / threshold via configs/runpod.yaml's
+        # sampling.crowd_shot_max_persons.
+        #
         # Stage 4 pre-filter is not 100% reliable (e.g. shot_0106 was
         # tagged dominant but VLM sees 18 persons). Use R2's
         # visible_person_count_total (honest total including background)

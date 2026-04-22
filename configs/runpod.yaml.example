@@ -102,6 +102,14 @@ sampling:
   face_detector: haar               # haar (cv2 内置) | yolo_face (需 yolov8n-face.pt)
 
   # ── Crowd shot 抛弃 ──
+  # ⚠ 这是 POD-SIDE RUNTIME POLICY，不在 delivery_v1 spec 范围内 —— spec
+  # 没有规定 crowd 怎么处理。我们做 gating 的原因是：
+  #   1. crowd shot 跑 N 次 R1 per-person 会爆 token / 时间预算
+  #   2. 背景 extras 的 body_analysis 信息密度极低，性价比不值
+  # 输出仍然是 spec-compliant：R2 face + R3 scene 写完，persons[] 写出但
+  # body_analysis=null + exclusion_reason="crowd_shot_excluded (N persons)"。
+  # 想严格按 spec 走完所有 person → 把阈值调到 999 或更大。
+  #
   # R2 让 VLM 输出 visible_person_count_total（含背景）；若 > 该阈值则
   # 跳过 R1 per-person 推理，用 R3 shot 级元数据 + exclusion_reason 写盘。
   # Stage 4 pre-filter 对 crowd 分类不够精准，此 gate 是 VLM-view 的最终裁判。
