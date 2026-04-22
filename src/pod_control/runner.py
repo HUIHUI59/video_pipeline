@@ -6,7 +6,11 @@ and lifecycle state via store.state_lock() so the single-run-slot
 invariant holds across API requests.
 
 The actual upload / inference / download still happens inside the shell
-script; this module only owns "one run active" bookkeeping.
+script; this module only owns "one run active" bookkeeping + builds a
+per-run YAML config file that bakes in (a) the chosen pod's SSH info,
+(b) the user's selected output_root paths, and (c) the batch's filter
+params, then passes that config path as the single positional arg to
+run_all.sh.
 """
 from __future__ import annotations
 
@@ -16,6 +20,9 @@ import subprocess
 import time
 import uuid
 from pathlib import Path
+from typing import Callable
+
+import yaml
 
 from .store import Batch, PodProfile, RunRecord, Store
 
@@ -35,36 +42,94 @@ def _new_run_id() -> str:
 
 
 def _build_run_all_cmd(
-    pod: PodProfile,
-    batch: Batch,
     *,
-    preset_path: str | None,
     run_all_script: Path,
+    config_path: Path,
+    batch: Batch,
 ) -> list[str]:
-    """Translate a Batch + PodProfile to run_all.sh invocation.
+    """Build the run_all.sh invocation.
 
-    run_all.sh is a thin chain over upload → 02_run → download; the pod
-    profile is passed as env (RUNPOD_SSH_*) rather than a file because
-    it lives in the pod_control store, not as a servers.yaml row.
+    Shape: bash run_all.sh <config_path> [extra CLI flags forwarded to upload.py]
+
+    run_all.sh expects $1 to be the config YAML file path (not a flag!).
+    The YAML already encodes pod / paths / filters / model. The only
+    upload.py knobs NOT expressible in YAML are the "include" toggles
+    and duration bounds — those get forwarded as extra args, which
+    run_all.sh passes through "${@:2}" to 01_push.sh.
     """
-    cmd: list[str] = ["bash", str(run_all_script)]
-    if preset_path:
-        cmd += ["--config", preset_path]
+    cmd: list[str] = ["bash", str(run_all_script), str(config_path)]
     fp = batch.filter_params
-    cmd += ["--movies", ",".join(batch.movies)]
-    if fp.categories:
-        cmd += ["--categories", ",".join(fp.categories)]
     if not fp.skip_bad_quality:
         cmd += ["--include-bad-quality"]
     if not fp.skip_landscape:
         cmd += ["--include-landscape"]
-    if fp.max_shots:
-        cmd += ["--max-shots", str(fp.max_shots)]
     if fp.min_duration_sec is not None:
         cmd += ["--min-duration", str(fp.min_duration_sec)]
     if fp.max_duration_sec is not None:
         cmd += ["--max-duration", str(fp.max_duration_sec)]
     return cmd
+
+
+def _write_merged_config(
+    *,
+    preset_path: Path | None,
+    pod: PodProfile,
+    batch: Batch,
+    output_root: Path,
+    target_path: Path,
+) -> Path:
+    """Build the per-run YAML config and write it to target_path.
+
+    Merge order:
+      1) base = preset_path (if given) else configs/runpod.yaml at repo root
+      2) override pod: section with this run's PodProfile
+      3) override paths: with the selected output_root
+      4) override filters: with the batch's movies + FilterParams
+    """
+    # 1) load base preset
+    if preset_path and preset_path.is_file():
+        cfg = yaml.safe_load(preset_path.read_text("utf-8")) or {}
+    else:
+        default = _REPO_ROOT / "configs" / "runpod.yaml"
+        if not default.is_file():
+            # Fall back to the .example so the user at least gets a
+            # skeleton with model / sampling defaults.
+            default = _REPO_ROOT / "configs" / "runpod.yaml.example"
+        cfg = (
+            yaml.safe_load(default.read_text("utf-8")) or {}
+            if default.is_file() else {}
+        )
+
+    # 2) pod SSH info from PodProfile
+    cfg["pod"] = {
+        "host": pod.host,
+        "port": pod.port,
+        "user": pod.user,
+        "ssh_key": pod.ssh_key,
+    }
+
+    # 3) paths grounded in the web-UI's output_root
+    paths = dict(cfg.get("paths") or {})
+    paths["local_clips_root"]   = str(output_root / "clips")
+    paths["local_labels_root"]  = str(output_root / "labels")
+    paths["local_manifest_dir"] = str(output_root / "manifest")
+    paths["pod_workspace"]      = pod.workspace
+    cfg["paths"] = paths
+
+    # 4) filters from the batch
+    fp = batch.filter_params
+    cfg["filters"] = {
+        "shot_categories": list(fp.categories or []),
+        "movies": list(batch.movies),
+        "max_shots": fp.max_shots,
+    }
+
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.write_text(
+        yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    return target_path
 
 
 class Runner:
@@ -76,10 +141,12 @@ class Runner:
         *,
         run_all_script: Path = _RUN_ALL,
         kill_script: Path = _KILL_SH,
+        output_root_provider: Callable[[], Path | None] = lambda: None,
     ) -> None:
         self.store = store
         self.run_all_script = run_all_script
         self.kill_script = kill_script
+        self._output_root_provider = output_root_provider
         self._popen = subprocess.Popen
         self._active_popen = None
         self._active_stdout_fh = None
@@ -98,16 +165,33 @@ class Runner:
             raise RunnerError(
                 f"run_all script missing: {self.run_all_script}"
             )
-        cmd = _build_run_all_cmd(
-            pod, batch,
-            preset_path=preset_path,
-            run_all_script=self.run_all_script,
-        )
+        output_root = self._output_root_provider()
+        if output_root is None:
+            raise RunnerError(
+                "output_root not configured — set one in Prepare → Output root"
+            )
         run_id = _new_run_id()
         run_dir = self.store.run_dir(run_id)
         stdout_path = run_dir / "stdout.log"
 
+        # Build the per-run config that 01_push.sh / 02_run.sh will read.
+        config_path = _write_merged_config(
+            preset_path=Path(preset_path) if preset_path else None,
+            pod=pod,
+            batch=batch,
+            output_root=Path(output_root),
+            target_path=run_dir / "runpod.yaml",
+        )
+        cmd = _build_run_all_cmd(
+            run_all_script=self.run_all_script,
+            config_path=config_path,
+            batch=batch,
+        )
+
         env = os.environ.copy()
+        # Kept for any future scripts that read SSH info from env. The
+        # primary source is now the generated YAML, but env doesn't
+        # cost anything.
         env["RUNPOD_SSH_HOST"] = pod.host
         env["RUNPOD_SSH_USER"] = pod.user
         env["RUNPOD_SSH_KEY"] = os.path.expanduser(pod.ssh_key)

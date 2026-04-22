@@ -598,14 +598,62 @@ async function populateRunSelectors() {
   const batches = (await batchesR.json()).batches || [];
   const pods = (await podsR.json()).pods || [];
   const batchSel = $("#run-batch-sel");
-  batchSel.innerHTML = batches
-    .filter((b) => b.status === "ready")
-    .map((b) => `<option value="${b.name}">${b.name} (${b.movie}, ${b.shot_count})</option>`)
-    .join("");
+  if (!batches.length) {
+    batchSel.innerHTML = `<option value="">no batches saved — go to Prepare</option>`;
+  } else {
+    batchSel.innerHTML = batches.map((b) => {
+      const moviesLabel = b.movies?.length > 1
+        ? `${b.movies.length} movies`
+        : (b.movies?.[0] ?? b.movie ?? "?");
+      const disabled = b.status !== "ready" ? " disabled" : "";
+      return `<option value="${b.name}" data-status="${b.status}"${disabled}>${b.name} · ${moviesLabel} · ${b.shot_count} shots [${b.status}]</option>`;
+    }).join("");
+  }
+  // Pick the first ready option (first non-disabled).
+  for (const opt of batchSel.options) {
+    if (!opt.disabled && opt.value) {
+      opt.selected = true;
+      break;
+    }
+  }
   const podSel = $("#run-pod-sel");
-  podSel.innerHTML = pods
-    .map((p) => `<option value="${p.name}">${p.name} (${p.user}@${p.host})</option>`)
-    .join("");
+  podSel.innerHTML = pods.length
+    ? pods.map((p) => `<option value="${p.name}">${p.name} (${p.user}@${p.host})</option>`).join("")
+    : `<option value="">no pods — go to Pods</option>`;
+
+  // If a non-ready batch is currently selected (or none ready exists),
+  // surface a reset shortcut next to the selector.
+  _renderResetHint(batches);
+}
+
+function _renderResetHint(batches) {
+  const hint = $("#run-reset-hint");
+  if (!hint) return;
+  const stuck = batches.filter((b) => b.status === "failed" || b.status === "done");
+  if (!stuck.length) {
+    hint.innerHTML = "";
+    return;
+  }
+  hint.innerHTML = `
+    <span class="muted">Stuck batches:</span>
+    ${stuck.map((b) => `
+      <button class="inline-btn" data-reset="${b.name}" type="button">
+        reset ${b.name} (${b.status})
+      </button>`).join("")}`;
+  hint.querySelectorAll("button[data-reset]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const name = btn.dataset.reset;
+      try {
+        const r = await fetch(`/api/batches/${encodeURIComponent(name)}/reset`,
+                              { method: "POST" });
+        await jsonOrThrow(r);
+        await populateRunSelectors();
+        await loadBatches();
+      } catch (err) {
+        alert(err.message);
+      }
+    });
+  });
 }
 
 function renderActive(active) {

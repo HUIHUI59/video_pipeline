@@ -161,10 +161,11 @@
           <label>preset (optional)
             <input id="run-preset" type="text" placeholder="configs/runpod.yaml" />
           </label>
-          <button id="run-launch-btn">Launch</button>
-          <button id="run-kill-btn" disabled>Kill active</button>
+          <button class="btn-primary" id="run-launch-btn">Launch</button>
+          <button class="btn-danger" id="run-kill-btn" disabled>Kill active</button>
           <span id="run-form-msg" class="muted"></span>
         </div>
+        <div id="run-reset-hint" class="run-reset-hint"></div>
       </section>
 
       <section class="panel">

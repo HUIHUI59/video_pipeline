@@ -119,7 +119,6 @@ def create_app(
     data_root_p = Path(data_root)
     cli_output_root_p = Path(output_root) if output_root else None
     store = Store(data_root_p)
-    runner = Runner(store)
 
     def _current_output_root() -> Path | None:
         # Persisted override beats CLI default.
@@ -127,6 +126,8 @@ def create_app(
         if state.current_output_root:
             return Path(state.current_output_root)
         return cli_output_root_p
+
+    runner = Runner(store, output_root_provider=_current_output_root)
 
     def _scan_output_root_candidates() -> list[str]:
         """Scan parent of CLI default for siblings containing manifest/."""
@@ -337,6 +338,23 @@ def create_app(
             status = 404 if code == "batch_not_found" else 409
             raise _err(code, str(ex), status=status)
         return Response(status_code=204)
+
+    @app.post("/api/batches/{name}/reset")
+    def reset_batch(name: str) -> dict:
+        """Flip a stuck batch (running/failed/done) back to ready so the
+        user can re-launch it. Refuses if it's the active run."""
+        b = store.get_batch(name)
+        if b is None:
+            raise _err("batch_not_found", f"batch {name!r} not found",
+                       status=404)
+        active = store.read_state().active_run
+        if active and active.batch_name == name:
+            raise _err("batch_in_use",
+                       "batch is currently running — kill the run first",
+                       status=409)
+        b.status = "ready"
+        store.save_batch(b, overwrite=True)
+        return b.model_dump()
 
     # ── M4 Pods ---------------------------------------------------------
 
