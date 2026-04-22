@@ -86,38 +86,62 @@ def _fresh_validator():
     )
 
 
-# ── CHECK 15 / 16（pre-restore 的 spec 扩展，已回退到 zip baseline）──
-# 这 4 个测试覆盖的功能在 spec 的 zip baseline 里不存在 —— 它们是 commit
-# 2084a44 把 pipeline 逻辑塞进了 spec validate_body_analysis.py 里。spec
-# 已回退到 zip 版本 (2026-04-22)，所以这些 test 无对象可测。
-# C2 / C3 / C7 完成后，pod_runner 会在 spec ShotValidator 之后追加同等行为
-# 的 _pod_extra_checks()，到时候在新文件里重写覆盖（断言 pod 端，不是 spec 端）。
+# ── CHECK 15 / 16（pod-side port）─────────────────────────────
+# spec 的 zip baseline 只有 14 个 CHECK；CHECK 15/16 是 2026-04-22 那次
+# restore 之前的 spec 扩展。因为 spec 改为 read-only，等价规则已 port 到
+# pod_runner._pod_extra_checks()（RESTORE_LOG_2026-04-22.md § 3 记录）。
+# 这里的测试断言 pod 端实现，不再打 spec validator。
 import pytest
 
-_DELIVERY_V1_RESTORED = pytest.mark.skip(
-    reason="CHECK15/16 是 pre-restore 的 spec 扩展，spec 已恢复 zip baseline；"
-           "等 C2/C3/C7 把同等行为搬到 src/runpod/_pod_extra_checks 后，在新 test 里覆盖"
-)
+
+def _call_pod_extra_checks(shot: dict) -> tuple[list[dict], list[dict]]:
+    import pod_runner
+    return pod_runner._pod_extra_checks(shot)
 
 
-@_DELIVERY_V1_RESTORED
 def test_check15_solo_contact_mismatch_is_error():
-    pass
+    errs, warns = _call_pod_extra_checks({
+        "shot_id": "m/s1",
+        "interaction": {"count": "solo", "contact": "sustained"},
+    })
+    assert any(e.get("check") == "interaction_solo_contact_mismatch"
+               for e in errs), f"expected CHECK 15 error, got {errs}"
 
 
-@_DELIVERY_V1_RESTORED
 def test_check15_solo_none_is_ok():
-    pass
+    errs, _warns = _call_pod_extra_checks({
+        "shot_id": "m/s1",
+        "interaction": {"count": "solo", "contact": "none"},
+    })
+    assert not any(e.get("check") == "interaction_solo_contact_mismatch"
+                   for e in errs)
 
 
-@_DELIVERY_V1_RESTORED
 def test_check16_asymmetric_is_warning():
-    pass
+    _errs, warns = _call_pod_extra_checks({
+        "shot_id": "m/s1",
+        "persons": [
+            {"person_index": 0, "body_analysis": {"interaction": {
+                "interacts_with_person_index": [1]}}},
+            {"person_index": 1, "body_analysis": {"interaction": {
+                "interacts_with_person_index": []}}},
+        ],
+    })
+    assert any(w.get("check") == "interaction_asymmetric" for w in warns), \
+        f"expected CHECK 16 asymmetric warning, got {warns}"
 
 
-@_DELIVERY_V1_RESTORED
 def test_check16_missing_peer_is_warning():
-    pass
+    _errs, warns = _call_pod_extra_checks({
+        "shot_id": "m/s1",
+        "persons": [
+            {"person_index": 0, "body_analysis": {"interaction": {
+                "interacts_with_person_index": [5]}}},
+        ],
+    })
+    assert any(w.get("check") == "interaction_references_missing_person"
+               for w in warns), \
+        f"expected CHECK 16 missing-peer warning, got {warns}"
 
 
 @pytest.mark.skip(

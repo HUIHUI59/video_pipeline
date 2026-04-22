@@ -214,6 +214,95 @@ def _frame_count_for_category(category: str, cfg_sampling: dict[str, Any]) -> in
     return int(cfg_sampling.get("frames_multi_wide", 4))
 
 
+def _pod_extra_checks(obj: dict) -> tuple[list[dict], list[dict]]:
+    """Pod-side business rules NOT in the zip baseline spec validator.
+
+    Ports the CHECK 15 / CHECK 16 logic that was added to an experimental
+    spec branch (pre-restore) and then dropped when spec was reset to the
+    zip baseline (see docs/labelingStandards/RESTORE_LOG_2026-04-22.md).
+    The rules are still desirable — they catch real VLM drift — so we
+    keep them here on the pod side where the spec is read-only.
+
+    Returns (errors, warnings) in the same issue-dict shape as spec
+    ShotValidator.validate so callers can merge the lists directly.
+    """
+    errors: list[dict] = []
+    warnings: list[dict] = []
+    shot_id = str(obj.get("shot_id", ""))
+
+    def _issue(check: str, field: str, message: str, pidx=None,
+               **extra) -> dict:
+        d: dict = {
+            "shot_id": shot_id,
+            "person_index": pidx,
+            "check": check,
+            "field": field,
+            "message": message,
+        }
+        d.update(extra)
+        return d
+
+    # CHECK 15: top-level interaction.count='solo' ⇒ contact must be 'none'.
+    inter = obj.get("interaction")
+    if isinstance(inter, dict):
+        count = inter.get("count")
+        contact = inter.get("contact")
+        if count == "solo" and contact not in (None, "none"):
+            errors.append(_issue(
+                "interaction_solo_contact_mismatch",
+                "interaction.contact",
+                f"interaction.count='solo' but contact='{contact}' "
+                f"(delivery_v1 § 7.2 requires 'none')",
+                value=contact,
+            ))
+
+    # CHECK 16: per-person interacts_with_person_index should be symmetric.
+    persons = obj.get("persons")
+    if isinstance(persons, list):
+        idx_to_pos: dict = {}
+        for pos, p in enumerate(persons):
+            if isinstance(p, dict):
+                idx_to_pos[p.get("person_index", pos)] = pos
+
+        def _peers_of(p):
+            if not isinstance(p, dict):
+                return []
+            ba = p.get("body_analysis")
+            if not isinstance(ba, dict):
+                return []
+            inter_p = ba.get("interaction")
+            if not isinstance(inter_p, dict):
+                return []
+            raw = inter_p.get("interacts_with_person_index") or []
+            return [x for x in raw if isinstance(x, int)]
+
+        for pos, p in enumerate(persons):
+            if not isinstance(p, dict):
+                continue
+            own_idx = p.get("person_index", pos)
+            for peer in _peers_of(p):
+                if peer not in idx_to_pos:
+                    warnings.append(_issue(
+                        "interaction_references_missing_person",
+                        "body_analysis.interaction.interacts_with_person_index",
+                        f"person_index={own_idx} references peer={peer} "
+                        f"that is not in persons[]",
+                        pidx=own_idx, value=peer,
+                    ))
+                    continue
+                peer_p = persons[idx_to_pos[peer]]
+                if own_idx not in _peers_of(peer_p):
+                    warnings.append(_issue(
+                        "interaction_asymmetric",
+                        "body_analysis.interaction.interacts_with_person_index",
+                        f"person_index={own_idx} references peer={peer} "
+                        f"but peer does not reference {own_idx} back",
+                        pidx=own_idx, value=peer,
+                    ))
+
+    return errors, warnings
+
+
 def _pil_to_data_url(img, fmt: str = "JPEG", quality: int = 90) -> str:
     """PIL Image -> data:image/jpeg;base64,... (vLLM chat API 要的 OpenAI 格式)"""
     buf = io.BytesIO()
@@ -1288,9 +1377,15 @@ def main() -> int:
             log.info(f"[info] {e.shot_id}: 跳过 Pydantic 结构校验 "
                      f"(disable_schema_validation=true)")
 
-        # 5) 业务校验（16 项 ShotValidator）— errors=0 才算合格
+        # 5) 业务校验（spec 14 项 ShotValidator + pod CHECK 15/16）
+        #    CHECK 15/16 原本在一个 spec 扩展分支里；RESTORE_LOG 记录 spec 已回到
+        #    zip baseline，等价逻辑 port 到 _pod_extra_checks（本模块顶层）。
+        #    errors=0 才算合格。
         try:
             errors, warnings, _infos = validator.validate(obj)
+            extra_errs, extra_warns = _pod_extra_checks(obj)
+            errors.extend(extra_errs)
+            warnings.extend(extra_warns)
         except Exception as ex:
             log.error(f"[ERR validator] {e.shot_id}: {ex}")
             _save_failed(out_root, slug, raw_r1, f"validator_crash: {ex}")
