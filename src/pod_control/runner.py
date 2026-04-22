@@ -343,10 +343,43 @@ class Runner:
     # ── Kill ────────────────────────────────────────────────────────
 
     def kill_active(self) -> RunRecord:
+        """Kill the active run — remote pod_runner first, then local bash.
+
+        Order matters: without remote kill via 99_kill.sh, `nohup pod_runner`
+        on the pod keeps processing and the GPU stays occupied. The local
+        bash kill alone only interrupts the SSH tail, not the real work.
+        """
         state = self.store.read_state()
         if state.active_run is None:
             raise RunnerError("no active run")
-        pid = state.active_run.pid
+        active = state.active_run
+
+        # Step 1: kill remote pod_runner + GPU workers (best-effort).
+        run_dir = self.store.run_dir(active.id)
+        config_path = run_dir / "runpod.yaml"
+        stdout_log = run_dir / "stdout.log"
+        if self.kill_script.is_file() and config_path.is_file():
+            try:
+                with stdout_log.open("ab") as fh:
+                    fh.write(b"\n[pod_control:stage=killing]\n"
+                             b"== 99_kill.sh: remote pod_runner + GPU ==\n")
+                    fh.flush()
+                    subprocess.run(
+                        ["bash", str(self.kill_script), str(config_path)],
+                        stdout=fh, stderr=subprocess.STDOUT,
+                        timeout=90,
+                    )
+            except Exception as ex:
+                try:
+                    with stdout_log.open("ab") as fh:
+                        fh.write(
+                            f"\n[pod_control:kill_remote_failed] {ex}\n".encode()
+                        )
+                except Exception:
+                    pass
+
+        # Step 2: kill local bash subprocess tree.
+        pid = active.pid
         if pid is not None:
             try:
                 os.killpg(pid, signal.SIGTERM)
@@ -361,7 +394,7 @@ class Runner:
                     except ProcessLookupError:
                         pass
             except ProcessLookupError:
-                pass  # Already dead; continue to finalize.
+                pass
 
         self._finalize(returncode=None)
         return self.store.read_state().history[0]

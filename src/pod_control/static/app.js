@@ -227,15 +227,21 @@ async function loadBatches() {
     }
     for (const b of batches) {
       const li = document.createElement("li");
+      li.className = "batch-row";
+      li.dataset.name = b.name;
       const moviesLabel = (b.movies && b.movies.length > 1)
         ? `${b.movies.length} movies`
         : (b.movies?.[0] ?? b.movie ?? "?");
       li.innerHTML = `
-        <span>
-          ${b.name}
+        <span class="batch-main">
+          <span class="batch-name">${b.name}</span>
           <small class="muted">(${moviesLabel} · ${b.shot_count})</small>
           <span class="status-badge status-${b.status}">${b.status}</span>
         </span>`;
+      li.addEventListener("click", (e) => {
+        if (e.target.closest(".delete-btn")) return;
+        loadBatchIntoFilter(b);
+      });
       const del = document.createElement("button");
       del.className = "delete-btn";
       del.textContent = "delete";
@@ -259,6 +265,46 @@ async function loadBatches() {
   } catch (err) {
     ul.innerHTML = `<li class="muted">${err.message}</li>`;
   }
+}
+
+// Load a saved batch's movies + filter params back into the filter panel.
+function loadBatchIntoFilter(batch) {
+  // 1. Highlight the selected row.
+  $$("#batch-list li").forEach((li) => {
+    li.classList.toggle("batch-active", li.dataset.name === batch.name);
+  });
+
+  // 2. Reset + set movie selection from batch.movies.
+  state.selectedMovies = new Set(batch.movies || []);
+  $$("#movie-list input[type=checkbox]").forEach((cb) => {
+    cb.checked = state.selectedMovies.has(cb.value);
+    cb.closest("li")?.classList.toggle("active", cb.checked);
+  });
+  updateMoviesCount?.();
+
+  // 3. Populate filter inputs from batch.filter_params.
+  const fp = batch.filter_params || {};
+  const cats = new Set(fp.categories || []);
+  $$("#category-checks input[type=checkbox]").forEach((cb) => {
+    cb.checked = cats.has(cb.value);
+    cb.closest("label.chip")?.classList.toggle("on", cb.checked);
+  });
+  $("#skip-bad-quality").checked = fp.skip_bad_quality !== false;
+  $("#skip-landscape").checked = fp.skip_landscape !== false;
+  $("#max-shots").value = fp.max_shots ?? "";
+  $("#min-duration").value = fp.min_duration_sec ?? "";
+  $("#max-duration").value = fp.max_duration_sec ?? "";
+
+  // 4. Show filter panel, hide empty hint.
+  const count = state.selectedMovies.size;
+  $("#empty-hint").hidden = count > 0;
+  $("#filter-panel").hidden = count === 0;
+  $("#current-movie").textContent = count === 1
+    ? [...state.selectedMovies][0]
+    : `${count} movies · ${batch.name}`;
+
+  state.page = 1;
+  if (count > 0) applyFilter();
 }
 
 function toggleMovie(movie, selected) {
@@ -796,6 +842,8 @@ const monitorState = {
   accLog: "",        // accumulated stdout.log content for stage parsing
   startedAt: null,
   timer: null,
+  podName: null,      // for pod-direct log fallback
+  podLogOffset: 0,    // separate offset for remote pod_runner.log
 };
 
 function monitorStop() {
@@ -881,14 +929,10 @@ function renderStageStepper(stage, checkpoint) {
 async function monitorInit() {
   monitorStop();
   try {
-    const { active_run } = await jsonOrThrow(await fetch("/api/runs/active"));
-
-    // Also check history for the most recent run if no active run
-    let run = active_run;
-    if (!run) {
-      const { history } = await jsonOrThrow(await fetch("/api/runs")).then(r => r.json()).catch(() => ({ history: [] }));
-      run = history?.[0] || null;
-    }
+    // Get both active and history in one call.
+    const runs = await jsonOrThrow(await fetch("/api/runs"));
+    const active_run = runs.active?.[0] || null;
+    const run = active_run || runs.history?.[0] || null;
 
     const pullBtn = $("#monitor-pull-btn");
     if (!run) {
@@ -899,32 +943,38 @@ async function monitorInit() {
       monitorState.runId = null;
       monitorState.localOffset = 0;
       monitorState.accLog = "";
+      monitorState.podName = null;
+      monitorState.podLogOffset = 0;
       pullBtn.disabled = true;
       return;
     }
 
-    const isActive = active_run && active_run.id === run.id;
     monitorState.runId = run.id;
     monitorState.localOffset = 0;
     monitorState.accLog = "";
     monitorState.startedAt = run.started_at || null;
+    monitorState.podName = run.pod_name;
+    monitorState.podLogOffset = 0;
     pullBtn.disabled = false;
     pullBtn.dataset.runId = run.id;
 
     $("#monitor-log").textContent = "";
     $("#monitor-stages-panel").hidden = false;
+    const isActive = active_run && active_run.id === run.id;
+    const statusLabel = isActive ? run.status : `${run.status} (detached, pod may still be running)`;
     $("#monitor-summary").innerHTML = `
       <dl class="run-meta">
         <div><dt>id</dt><dd>${run.id}</dd></div>
         <div><dt>batch</dt><dd>${run.batch_name}</dd></div>
         <div><dt>pod</dt><dd>${run.pod_name}</dd></div>
-        <div><dt>status</dt><dd class="run-status ${run.status}">${run.status}</dd></div>
+        <div><dt>status</dt><dd class="run-status ${run.status}">${statusLabel}</dd></div>
         <div><dt>pid</dt><dd>${run.pid ?? "—"}</dd></div>
         <div><dt>started</dt><dd>${fmtEpoch(run.started_at)}</dd></div>
       </dl>`;
 
     await monitorPoll();
-    if (isActive) monitorLoop();
+    // Always keep polling: even detached runs can be tracked via pod-direct.
+    monitorLoop();
   } catch (err) {
     $("#monitor-summary").textContent = err.message;
   }
@@ -933,8 +983,9 @@ async function monitorInit() {
 async function monitorPoll() {
   if (!monitorState.runId) return;
   const id = encodeURIComponent(monitorState.runId);
+  const podName = monitorState.podName;
   try {
-    // 1. Fetch incremental local log (stdout.log — all stages)
+    // 1. Incremental LOCAL log (stdout.log — has bash stage markers + SSH tail).
     const localR = await fetch(`/api/runs/${id}/local-tail?offset=${monitorState.localOffset}`);
     const localBody = await jsonOrThrow(localR);
     if (localBody.text) {
@@ -946,25 +997,38 @@ async function monitorPoll() {
     monitorState.localOffset = localBody.next_offset;
     $("#monitor-offset").textContent = `offset ${localBody.next_offset}`;
 
-    // 2. Fetch checkpoint via existing SSH tail endpoint (checkpoint only)
-    let checkpoint = { done: 0, failed: 0, pending: 0 };
-    try {
-      const ckR = await fetch(`/api/runs/${id}/tail?offset=0`);
-      const ckBody = await ckR.json();
-      checkpoint = ckBody.checkpoint || checkpoint;
-    } catch (_) { /* ssh may be unavailable */ }
+    // 2. POD-DIRECT log tail (independent of active_run) — picks up new
+    //    pod_runner.log output even when local bash already died.
+    if (podName && localBody.finished) {
+      try {
+        const podR = await fetch(
+          `/api/pods/${encodeURIComponent(podName)}/log-tail` +
+          `?offset=${monitorState.podLogOffset}`
+        );
+        const podBody = await jsonOrThrow(podR);
+        if (podBody.text) {
+          monitorState.accLog += podBody.text;
+          const pre = $("#monitor-log");
+          pre.textContent += `\n[pod-direct] ` + podBody.text;
+          if ($("#monitor-autoscroll").checked) pre.scrollTop = pre.scrollHeight;
+        }
+        monitorState.podLogOffset = podBody.next_offset;
+      } catch (_) { /* pod unreachable; keep polling */ }
+    }
 
-    // 3. Detect stage + render stepper
+    // 3. Checkpoint: prefer pod-direct (works for detached runs too).
+    let checkpoint = { done: 0, failed: 0, pending: 0 };
+    if (podName) {
+      try {
+        const ckR = await fetch(`/api/pods/${encodeURIComponent(podName)}/checkpoint`);
+        checkpoint = await jsonOrThrow(ckR);
+      } catch (_) { /* ssh may be unavailable */ }
+    }
+
+    // 4. Stage detection + stepper render.
     const stage = detectStage(monitorState.accLog);
     if (stage) renderStageStepper(stage, checkpoint);
     $("#monitor-status").textContent = stage ? `stage: ${stage}` : "";
-
-    if (localBody.finished) {
-      monitorStop();
-      renderStageStepper("done", checkpoint);
-      $("#monitor-status").textContent = "finished";
-      await refreshRuns();
-    }
   } catch (err) {
     $("#monitor-status").textContent = err.message;
   }

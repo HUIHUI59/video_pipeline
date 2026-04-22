@@ -10,4 +10,11 @@ if [ ! -f "$CONFIG" ]; then
   exit 1
 fi
 
-python -m src.runpod.upload --config "$CONFIG" "${@:2}"
+echo "[push] config = $CONFIG"
+echo "[push] starting upload.py (filter shots → write manifest → rsync clips → rsync code)"
+START_TS=$(date +%s)
+
+python -u -m src.runpod.upload --config "$CONFIG" "${@:2}"
+
+ELAPSED=$(( $(date +%s) - START_TS ))
+echo "[push] done in ${ELAPSED}s"

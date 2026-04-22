@@ -640,13 +640,15 @@ def create_app(
 
     @app.get("/api/runs/{run_id}/local-tail")
     def local_tail(run_id: str, offset: int = 0) -> dict:
-        """Return incremental content from the local stdout.log for this run."""
+        """Return incremental content from the local stdout.log for this run.
+
+        Only declares `finished=true` when the run is in history AND we've
+        caught up to EOF. Frontend can keep polling pod-direct endpoints
+        for detached runs even after local is finished.
+        """
         run_dir = store.run_dir(run_id)
         log_path = run_dir / "stdout.log"
         if not log_path.exists():
-            # Run dir / log may not exist yet (very early in launch) or
-            # run_id is stale — return empty rather than 404 so the frontend
-            # can poll safely.
             return {"text": "", "next_offset": 0, "finished": False}
         data = log_path.read_bytes()
         chunk = data[offset:]
@@ -654,12 +656,44 @@ def create_app(
         state = store.read_state()
         run_active = state.active_run is not None and state.active_run.id == run_id
         in_history = any(r.id == run_id for r in state.history)
-        finished = (not run_active) and (in_history or not run_active)
+        caught_up = next_offset == len(data)
+        finished = (not run_active) and in_history and caught_up
         return {
             "text": chunk.decode("utf-8", errors="replace"),
             "next_offset": next_offset,
-            "finished": finished and next_offset == len(data),
+            "finished": finished,
         }
+
+    @app.get("/api/pods/{pod_name}/log-tail")
+    def pod_log_tail(pod_name: str, offset: int = 0,
+                     path: str = "output/pod_runner.log") -> dict:
+        """Direct SSH tail of a log on the pod (works without active_run).
+
+        Lets the Monitor keep tracking a detached run (local bash died,
+        but pod_runner is still processing). `path` is relative to
+        workspace; leading slash or `..` rejected.
+        """
+        pod = store.get_pod(pod_name)
+        if pod is None:
+            raise _err("pod_not_found", f"no pod {pod_name!r}", status=404)
+        if path.startswith("/") or ".." in path.split("/"):
+            raise _err("invalid_path", "path must be relative to workspace",
+                       status=400)
+        remote = f"{pod.workspace}/{path}"
+        tail = pcssh.tail_remote_log(pod, remote_path=remote, offset=offset)
+        return {
+            "text": tail.text,
+            "next_offset": tail.next_offset,
+            "pod_unreachable": tail.pod_unreachable,
+        }
+
+    @app.get("/api/pods/{pod_name}/checkpoint")
+    def pod_checkpoint(pod_name: str) -> dict:
+        """Direct SSH checkpoint count for a pod (independent of active_run)."""
+        pod = store.get_pod(pod_name)
+        if pod is None:
+            raise _err("pod_not_found", f"no pod {pod_name!r}", status=404)
+        return _parse_checkpoint(pod)
 
     @app.post("/api/runs/{run_id}/pull")
     def trigger_pull(run_id: str) -> dict:

@@ -8,4 +8,11 @@ if [ ! -f "$CONFIG" ]; then
   echo "[ERR] 配置文件不存在: $CONFIG"; exit 1
 fi
 
-python -m src.runpod.download --config "$CONFIG" "${@:2}"
+echo "[pull] config = $CONFIG"
+echo "[pull] starting download.py (rsync labels back → validate schemas)"
+START_TS=$(date +%s)
+
+python -u -m src.runpod.download --config "$CONFIG" "${@:2}"
+
+ELAPSED=$(( $(date +%s) - START_TS ))
+echo "[pull] done in ${ELAPSED}s"

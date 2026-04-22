@@ -918,3 +918,32 @@ footer {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
+
+/* ── Clickable batch rows ────────────────────────────────── */
+
+.batch-row {
+  cursor: pointer;
+  transition: background .15s, border-color .15s;
+}
+.batch-row:hover {
+  background: rgba(124,180,247,.07);
+}
+.batch-row.batch-active {
+  background: rgba(124,180,247,.14);
+  border-left: 3px solid #7cb4f7;
+  padding-left: calc(var(--pad, 12px) - 3px);
+}
+.batch-main {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+}
+.batch-name {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
