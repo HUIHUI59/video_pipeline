@@ -793,9 +793,9 @@ async function monitorPoll() {
     // Checkpoint.
     const ck = body.checkpoint || {};
     $("#monitor-checkpoint").innerHTML = `
-      <span>done: <b>${ck.done ?? 0}</b></span> ·
-      <span>failed: <b>${ck.failed ?? 0}</b></span> ·
-      <span>pending: <b>${ck.pending ?? 0}</b></span>`;
+      <div class="ck-cell"><dt>done</dt><dd>${ck.done ?? 0}</dd></div>
+      <div class="ck-cell"><dt>failed</dt><dd>${ck.failed ?? 0}</dd></div>
+      <div class="ck-cell"><dt>pending</dt><dd>${ck.pending ?? 0}</dd></div>`;
 
     // Status.
     const status = body.pod_unreachable

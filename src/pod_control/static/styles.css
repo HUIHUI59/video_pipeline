@@ -586,6 +586,7 @@ label {
   font-size: 13px;
   letter-spacing: 0;
   text-transform: none;
+  width: 100%;
 }
 
 .pod-form-actions {
@@ -615,27 +616,55 @@ label {
 
 .run-form {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px 18px;
   align-items: end;
 }
 
-.run-form > button { margin-top: 18px; }
+.run-form > label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.run-form > label select,
+.run-form > label input {
+  font-size: 13px;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text);
+  width: 100%;
+}
+
+.run-form > button {
+  align-self: end;
+  height: 36px;
+}
 
 /* ── Run meta (card summary) ──────────────────────────────── */
 
 .run-meta {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 8px 16px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px 20px;
   font-size: 13px;
   margin: 0;
+  padding: 0;
 }
-.run-meta > div { display: flex; flex-direction: column; gap: 2px; }
+.run-meta > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;   /* so long ids wrap instead of overflow */
+}
 .run-meta dt {
   color: var(--muted);
-  font-size: 11px;
-  letter-spacing: 0.04em;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   margin: 0;
 }
@@ -643,6 +672,7 @@ label {
   margin: 0;
   color: var(--text);
   font-variant-numeric: tabular-nums;
+  word-break: break-all;   /* long paths/ids don't bust grid */
 }
 
 /* ── Status pills ────────────────────────────────────────── */
@@ -662,6 +692,35 @@ label {
 .run-status.done    { background: var(--ok-soft); color: var(--ok); }
 .run-status.failed  { background: var(--err-soft); color: var(--err); }
 .run-status.killed  { background: var(--err-soft); color: var(--err); }
+
+/* ── Checkpoint row (monitor) ─────────────────────────────── */
+
+.checkpoint-row {
+  display: flex;
+  gap: 28px;
+  flex-wrap: wrap;
+}
+.checkpoint-row .ck-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 80px;
+}
+.checkpoint-row dt {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin: 0;
+}
+.checkpoint-row dd {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
 
 /* ── Monitor panel ────────────────────────────────────────── */
 
@@ -684,10 +743,21 @@ label {
 .log-header {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   margin-bottom: 10px;
   font-size: 12px;
   color: var(--muted);
 }
+.log-header label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.log-header input[type=checkbox] { accent-color: var(--accent); }
 
 /* ── Scrollbars ──────────────────────────────────────────── */
 
