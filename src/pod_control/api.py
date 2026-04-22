@@ -632,6 +632,66 @@ def create_app(
             store.save_batch(batch, overwrite=True)
         return killed.model_dump()
 
+    @app.delete("/api/runs")
+    def clear_run_history() -> dict:
+        with store.state_lock() as state:
+            state.history = []
+        return {"ok": True}
+
+    @app.get("/api/runs/{run_id}/local-tail")
+    def local_tail(run_id: str, offset: int = 0) -> dict:
+        """Return incremental content from the local stdout.log for this run."""
+        run_dir = store.run_dir(run_id)
+        log_path = run_dir / "stdout.log"
+        if not log_path.exists():
+            # Run dir / log may not exist yet (very early in launch) or
+            # run_id is stale — return empty rather than 404 so the frontend
+            # can poll safely.
+            return {"text": "", "next_offset": 0, "finished": False}
+        data = log_path.read_bytes()
+        chunk = data[offset:]
+        next_offset = offset + len(chunk)
+        state = store.read_state()
+        run_active = state.active_run is not None and state.active_run.id == run_id
+        in_history = any(r.id == run_id for r in state.history)
+        finished = (not run_active) and (in_history or not run_active)
+        return {
+            "text": chunk.decode("utf-8", errors="replace"),
+            "next_offset": next_offset,
+            "finished": finished and next_offset == len(data),
+        }
+
+    @app.post("/api/runs/{run_id}/pull")
+    def trigger_pull(run_id: str) -> dict:
+        """Fire-and-forget: re-run 03_pull.sh for a finished (or active) run.
+
+        Output is appended to stdout.log so the local-tail endpoint picks it
+        up in the next poll cycle.
+        """
+        run_dir = store.run_dir(run_id)
+        config_path = run_dir / "runpod.yaml"
+        if not config_path.exists():
+            raise _err("config_not_found",
+                       f"no runpod.yaml for run {run_id!r}", status=404)
+        pull_script = Path(__file__).resolve().parent.parent.parent / \
+            "scripts" / "runpod" / "03_pull.sh"
+        if not pull_script.exists():
+            raise _err("script_not_found",
+                       f"03_pull.sh not found at {pull_script}", status=500)
+        import subprocess as _sp
+        stdout_log = run_dir / "stdout.log"
+        fh = stdout_log.open("ab")
+        header = f"\n[pod_control:stage=pull]\n══ manual re-pull ══\n".encode()
+        fh.write(header)
+        fh.flush()
+        _sp.Popen(
+            ["bash", str(pull_script), str(config_path)],
+            stdout=fh,
+            stderr=_sp.STDOUT,
+            close_fds=True,
+        )
+        return {"ok": True, "run_id": run_id}
+
     # ── clip streaming (Range-supporting, for preview) ------------------
 
     @app.get("/clips/{movie}/{shot}.mp4")

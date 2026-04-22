@@ -13,13 +13,18 @@ cd "$(dirname "$0")/../.."
 CONFIG="${1:-configs/runpod.yaml}"
 shift || true              # 把 $1 弹掉，"$@" 现在只剩 upload.py extra args
 
+echo "[pod_control:stage=push]"
 echo "══ 1/3 push ══"
 bash scripts/runpod/01_push.sh "$CONFIG" "$@"
 
 echo
+echo "[pod_control:stage=run]"
 echo "══ 2/3 run (tail 日志；跑完后 Ctrl+C 继续 pull) ══"
 bash scripts/runpod/02_run.sh "$CONFIG" || true   # 允许用 Ctrl+C 打断 tail
 
 echo
+echo "[pod_control:stage=pull]"
 echo "══ 3/3 pull ══"
 bash scripts/runpod/03_pull.sh "$CONFIG"
+
+echo "[pod_control:stage=done]"

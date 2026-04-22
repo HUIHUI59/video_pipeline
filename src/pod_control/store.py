@@ -222,8 +222,8 @@ class Store:
         p = self.batch_file(name)
         if not p.exists():
             raise StoreError(f"batch {name!r} not found")
-        existing = self.get_batch(name)
-        if existing is not None and existing.status == "running":
+        s = self.read_state()
+        if s.active_run is not None and s.active_run.batch_name == name:
             raise StoreError(f"batch {name!r} is running; cannot delete")
         p.unlink()
 

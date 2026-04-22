@@ -809,3 +809,112 @@ footer {
   header { padding: 12px 16px; flex-wrap: wrap; gap: 16px; }
   main { padding: 18px 16px 64px; }
 }
+
+/* ── Status badges (batch list) ──────────────────────────── */
+
+.status-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  vertical-align: middle;
+  margin-left: 4px;
+}
+.status-badge.status-ready   { background: #1a2a1a; color: var(--ok); }
+.status-badge.status-running { background: #1a1f2e; color: #7cb4f7; }
+.status-badge.status-done    { background: #1a2a1a; color: var(--ok); }
+.status-badge.status-failed  { background: #2a1a1a; color: var(--err); }
+
+/* ── Clear-history danger button (small) ─────────────────── */
+
+.btn-danger-sm {
+  font-size: 11px;
+  padding: 2px 8px;
+  background: transparent;
+  border: 1px solid var(--err);
+  color: var(--err);
+  border-radius: 4px;
+  cursor: pointer;
+  margin-left: 8px;
+  vertical-align: middle;
+}
+.btn-danger-sm:hover { background: rgba(230,77,77,.12); }
+
+/* ── Monitor: header row ─────────────────────────────────── */
+
+.monitor-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.monitor-header-row h2 { margin: 0; }
+
+/* ── Stage stepper ───────────────────────────────────────── */
+
+.stage-stepper {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0 16px;
+  flex-wrap: wrap;
+}
+.stage-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  min-width: 64px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  transition: border-color .2s, background .2s;
+}
+.stage-sep { color: var(--muted); font-size: 16px; }
+.stage-icon { font-size: 18px; line-height: 1; }
+.stage-label { font-size: 11px; font-weight: 600; color: var(--muted); }
+
+.stage-step.step-done {
+  border-color: var(--ok);
+  background: rgba(80, 200, 120, .07);
+}
+.stage-step.step-done .stage-icon { color: var(--ok); }
+.stage-step.step-done .stage-label { color: var(--ok); }
+
+.stage-step.step-active {
+  border-color: #7cb4f7;
+  background: rgba(124, 180, 247, .08);
+  box-shadow: 0 0 0 2px rgba(124,180,247,.15);
+}
+.stage-step.step-active .stage-icon { color: #7cb4f7; }
+.stage-step.step-active .stage-label { color: #7cb4f7; }
+
+.stage-step.step-pending { opacity: .4; }
+
+/* ── Inference progress bar ──────────────────────────────── */
+
+#monitor-inference-progress {
+  margin: 8px 0 4px;
+}
+.progress-bar-wrap {
+  height: 8px;
+  background: var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+.progress-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #3b82f6, #60a5fa);
+  border-radius: 4px;
+  transition: width .5s ease;
+}
+.progress-stats {
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}

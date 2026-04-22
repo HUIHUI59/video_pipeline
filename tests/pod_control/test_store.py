@@ -110,13 +110,30 @@ def test_delete_batch_missing_raises(tmp_path):
         store.delete_batch("nope")
 
 
-def test_delete_batch_running_blocked(tmp_path):
+def test_delete_batch_blocked_when_active_run_matches(tmp_path):
+    """Delete is blocked only when this batch IS the current active_run."""
+    from src.pod_control.store import RunRecord
     store = Store(tmp_path)
     b = Batch(name="b1", movie="m", filter_params=FilterParams(),
               status="running")
     store.save_batch(b)
+    with store.state_lock() as state:
+        state.active_run = RunRecord(
+            id="r1", batch_name="b1", pod_name="p", pid=9999,
+        )
     with pytest.raises(StoreError, match="running"):
         store.delete_batch("b1")
+
+
+def test_delete_batch_stale_running_status_succeeds(tmp_path):
+    """A batch with status='running' but no matching active_run can be deleted."""
+    store = Store(tmp_path)
+    b = Batch(name="b1", movie="m", filter_params=FilterParams(),
+              status="running")
+    store.save_batch(b)
+    # No active_run in state → stale status, should succeed
+    store.delete_batch("b1")
+    assert store.get_batch("b1") is None
 
 
 def test_delete_batch_ready_succeeds(tmp_path):

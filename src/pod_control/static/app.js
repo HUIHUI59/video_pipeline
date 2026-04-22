@@ -230,7 +230,12 @@ async function loadBatches() {
       const moviesLabel = (b.movies && b.movies.length > 1)
         ? `${b.movies.length} movies`
         : (b.movies?.[0] ?? b.movie ?? "?");
-      li.innerHTML = `<span>${b.name} <small class="muted">(${moviesLabel} · ${b.shot_count})</small></span>`;
+      li.innerHTML = `
+        <span>
+          ${b.name}
+          <small class="muted">(${moviesLabel} · ${b.shot_count})</small>
+          <span class="status-badge status-${b.status}">${b.status}</span>
+        </span>`;
       const del = document.createElement("button");
       del.className = "delete-btn";
       del.textContent = "delete";
@@ -239,7 +244,10 @@ async function loadBatches() {
         if (!confirm(`delete batch ${b.name}?`)) return;
         try {
           const r = await fetch(`/api/batches/${b.name}`, { method: "DELETE" });
-          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          if (!r.ok) {
+            const body = await r.json().catch(() => ({}));
+            throw new Error(body.detail || `HTTP ${r.status}`);
+          }
           await loadBatches();
         } catch (err) {
           alert(err.message);
@@ -753,6 +761,17 @@ $("#run-kill-btn").addEventListener("click", async () => {
   }
 });
 
+// ── Clear history ─────────────────────────────────────────────────────
+$("#clear-history-btn").addEventListener("click", async () => {
+  if (!confirm("Clear all run history? This cannot be undone.")) return;
+  try {
+    await fetch("/api/runs", { method: "DELETE" });
+    await refreshRuns();
+  } catch (err) {
+    alert(err.message);
+  }
+});
+
 // Refresh the selectors + poll whenever user switches to the Run tab.
 document
   .querySelector('nav button[data-tab="run"]')
@@ -773,7 +792,9 @@ document
 
 const monitorState = {
   runId: null,
-  offset: 0,
+  localOffset: 0,
+  accLog: "",        // accumulated stdout.log content for stage parsing
+  startedAt: null,
   timer: null,
 };
 
@@ -787,33 +808,123 @@ function monitorLoop() {
   monitorState.timer = setInterval(monitorPoll, 2000);
 }
 
+// Derive current stage from accumulated log text.
+function detectStage(log) {
+  let stage = null;
+  for (const line of log.split("\n")) {
+    const m = line.match(/\[pod_control:stage=(\w+)\]/);
+    if (m) stage = m[1];
+  }
+  return stage;
+}
+
+function renderStageStepper(stage, checkpoint) {
+  const steps = ["push", "run", "pull", "done"];
+  const stageOrder = { push: 0, run: 1, pull: 2, done: 3 };
+  const currentIdx = stageOrder[stage] ?? -1;
+
+  // Decide label for "run" step based on checkpoint
+  const ck = checkpoint || { done: 0, pending: 0, failed: 0 };
+  const inInference = stage === "run" && ck.done > 0;
+
+  for (const step of steps) {
+    const el = document.querySelector(`.stage-step[data-stage="${step}"]`);
+    if (!el) continue;
+    const idx = stageOrder[step];
+    el.classList.remove("step-done", "step-active", "step-pending");
+    const icon = el.querySelector(".stage-icon");
+    if (idx < currentIdx) {
+      el.classList.add("step-done");
+      icon.textContent = "✓";
+    } else if (idx === currentIdx) {
+      el.classList.add("step-active");
+      icon.textContent = "→";
+    } else {
+      el.classList.add("step-pending");
+      icon.textContent = "·";
+    }
+    if (step === "run") {
+      el.querySelector(".stage-label").textContent =
+        inInference ? "Inference" : (stage === "run" ? "Setup" : "Run");
+    }
+  }
+
+  // Inference progress bar
+  const progressSection = $("#monitor-inference-progress");
+  if (stage === "run" && inInference) {
+    progressSection.hidden = false;
+    const total = ck.done + ck.failed + ck.pending;
+    const processed = ck.done + ck.failed;
+    const pct = total > 0 ? Math.round((processed / total) * 100) : 0;
+    $("#monitor-progress-fill").style.width = `${pct}%`;
+
+    let etaStr = "";
+    if (monitorState.startedAt && processed > 0 && ck.pending > 0) {
+      const elapsedSec = (Date.now() / 1000) - monitorState.startedAt;
+      const rate = processed / elapsedSec;
+      const etaSec = Math.round(ck.pending / rate);
+      etaStr = etaSec < 60
+        ? ` · ETA ~${etaSec}s`
+        : ` · ETA ~${Math.round(etaSec / 60)}m`;
+    }
+    const elapsedMin = monitorState.startedAt
+      ? Math.round((Date.now() / 1000 - monitorState.startedAt) / 60)
+      : 0;
+    $("#monitor-progress-stats").textContent =
+      `done ${ck.done} · failed ${ck.failed} · pending ${ck.pending}` +
+      ` · ${pct}% · elapsed ${elapsedMin}m${etaStr}`;
+  } else {
+    progressSection.hidden = true;
+  }
+}
+
 async function monitorInit() {
   monitorStop();
   try {
     const { active_run } = await jsonOrThrow(await fetch("/api/runs/active"));
-    if (!active_run) {
+
+    // Also check history for the most recent run if no active run
+    let run = active_run;
+    if (!run) {
+      const { history } = await jsonOrThrow(await fetch("/api/runs")).then(r => r.json()).catch(() => ({ history: [] }));
+      run = history?.[0] || null;
+    }
+
+    const pullBtn = $("#monitor-pull-btn");
+    if (!run) {
       $("#monitor-summary").innerHTML = `<span class="muted">no active run</span>`;
       $("#monitor-status").textContent = "";
       $("#monitor-log").textContent = "";
-      $("#monitor-checkpoint").innerHTML = `<span class="muted">—</span>`;
+      $("#monitor-stages-panel").hidden = true;
       monitorState.runId = null;
-      monitorState.offset = 0;
+      monitorState.localOffset = 0;
+      monitorState.accLog = "";
+      pullBtn.disabled = true;
       return;
     }
-    monitorState.runId = active_run.id;
-    monitorState.offset = 0;
+
+    const isActive = active_run && active_run.id === run.id;
+    monitorState.runId = run.id;
+    monitorState.localOffset = 0;
+    monitorState.accLog = "";
+    monitorState.startedAt = run.started_at || null;
+    pullBtn.disabled = false;
+    pullBtn.dataset.runId = run.id;
+
     $("#monitor-log").textContent = "";
+    $("#monitor-stages-panel").hidden = false;
     $("#monitor-summary").innerHTML = `
       <dl class="run-meta">
-        <div><dt>id</dt><dd>${active_run.id}</dd></div>
-        <div><dt>batch</dt><dd>${active_run.batch_name}</dd></div>
-        <div><dt>pod</dt><dd>${active_run.pod_name}</dd></div>
-        <div><dt>status</dt><dd class="run-status ${active_run.status}">${active_run.status}</dd></div>
-        <div><dt>pid</dt><dd>${active_run.pid ?? "—"}</dd></div>
-        <div><dt>started</dt><dd>${fmtEpoch(active_run.started_at)}</dd></div>
+        <div><dt>id</dt><dd>${run.id}</dd></div>
+        <div><dt>batch</dt><dd>${run.batch_name}</dd></div>
+        <div><dt>pod</dt><dd>${run.pod_name}</dd></div>
+        <div><dt>status</dt><dd class="run-status ${run.status}">${run.status}</dd></div>
+        <div><dt>pid</dt><dd>${run.pid ?? "—"}</dd></div>
+        <div><dt>started</dt><dd>${fmtEpoch(run.started_at)}</dd></div>
       </dl>`;
+
     await monitorPoll();
-    monitorLoop();
+    if (isActive) monitorLoop();
   } catch (err) {
     $("#monitor-summary").textContent = err.message;
   }
@@ -821,44 +932,61 @@ async function monitorInit() {
 
 async function monitorPoll() {
   if (!monitorState.runId) return;
+  const id = encodeURIComponent(monitorState.runId);
   try {
-    const r = await fetch(
-      `/api/runs/${encodeURIComponent(monitorState.runId)}/tail?offset=${monitorState.offset}`
-    );
-    const body = await jsonOrThrow(r);
-
-    // Append new log text.
-    if (body.text) {
+    // 1. Fetch incremental local log (stdout.log — all stages)
+    const localR = await fetch(`/api/runs/${id}/local-tail?offset=${monitorState.localOffset}`);
+    const localBody = await jsonOrThrow(localR);
+    if (localBody.text) {
+      monitorState.accLog += localBody.text;
       const pre = $("#monitor-log");
-      pre.textContent += body.text;
-      if ($("#monitor-autoscroll").checked) {
-        pre.scrollTop = pre.scrollHeight;
-      }
+      pre.textContent += localBody.text;
+      if ($("#monitor-autoscroll").checked) pre.scrollTop = pre.scrollHeight;
     }
-    monitorState.offset = body.next_offset;
-    $("#monitor-offset").textContent = `offset ${body.next_offset}`;
+    monitorState.localOffset = localBody.next_offset;
+    $("#monitor-offset").textContent = `offset ${localBody.next_offset}`;
 
-    // Checkpoint.
-    const ck = body.checkpoint || {};
-    $("#monitor-checkpoint").innerHTML = `
-      <div class="ck-cell"><dt>done</dt><dd>${ck.done ?? 0}</dd></div>
-      <div class="ck-cell"><dt>failed</dt><dd>${ck.failed ?? 0}</dd></div>
-      <div class="ck-cell"><dt>pending</dt><dd>${ck.pending ?? 0}</dd></div>`;
+    // 2. Fetch checkpoint via existing SSH tail endpoint (checkpoint only)
+    let checkpoint = { done: 0, failed: 0, pending: 0 };
+    try {
+      const ckR = await fetch(`/api/runs/${id}/tail?offset=0`);
+      const ckBody = await ckR.json();
+      checkpoint = ckBody.checkpoint || checkpoint;
+    } catch (_) { /* ssh may be unavailable */ }
 
-    // Status.
-    const status = body.pod_unreachable
-      ? "pod unreachable"
-      : (body.finished ? body.status : "running");
-    $("#monitor-status").textContent = status;
+    // 3. Detect stage + render stepper
+    const stage = detectStage(monitorState.accLog);
+    if (stage) renderStageStepper(stage, checkpoint);
+    $("#monitor-status").textContent = stage ? `stage: ${stage}` : "";
 
-    if (body.finished) {
+    if (localBody.finished) {
       monitorStop();
-      await refreshRuns();   // pull history
+      renderStageStepper("done", checkpoint);
+      $("#monitor-status").textContent = "finished";
+      await refreshRuns();
     }
   } catch (err) {
     $("#monitor-status").textContent = err.message;
   }
 }
+
+// Pull results button
+$("#monitor-pull-btn").addEventListener("click", async () => {
+  const btn = $("#monitor-pull-btn");
+  const runId = btn.dataset.runId || monitorState.runId;
+  if (!runId) return;
+  btn.disabled = true;
+  btn.textContent = "Pulling…";
+  try {
+    await fetch(`/api/runs/${encodeURIComponent(runId)}/pull`, { method: "POST" });
+  } catch (err) {
+    alert(err.message);
+  }
+  setTimeout(() => {
+    btn.disabled = false;
+    btn.textContent = "Pull results";
+  }, 2000);
+});
 
 document
   .querySelector('nav button[data-tab="monitor"]')
