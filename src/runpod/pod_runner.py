@@ -461,10 +461,28 @@ def main() -> int:
             )
 
         user_templates: dict[str, str] = {}
+        r1_body_fewshot: dict[str, list[tuple[str, dict]]] = {
+            "single": [], "dominant": [], "multi": [],
+        }
         for cat in ("single", "dominant", "multi"):
             examples = load_examples(exa_dir, cat)
             user_templates[cat] = build_user_prompt(cat, examples)
-            log.info(f"Loaded few-shot: {cat}={len(examples)}")
+            # Extract person[0].body_analysis from up to 2 examples per cat —
+            # spec normative shape for the R1 per-person prompt (finding #8).
+            for ex in examples[:2]:
+                persons = ex.get("persons") or []
+                if not persons:
+                    continue
+                ba = persons[0].get("body_analysis")
+                if not ba:
+                    continue
+                src = ex.get("shot_id") or ex.get("meta", {}).get(
+                    "shot_id") or "example"
+                r1_body_fewshot[cat].append((str(src), ba))
+            log.info(
+                f"Loaded few-shot: {cat}={len(examples)} "
+                f"(R1 body fewshot: {len(r1_body_fewshot[cat])})"
+            )
     except Exception as e:
         log.error(f"构建 prompt 模板失败: {e}")
         return 4
@@ -1079,6 +1097,27 @@ def main() -> int:
                 "  - alternative_captions.direction: 30-50 words\n"
                 "  - alternative_captions.situational: 30-60 words"
             )
+            fewshot_blocks = r1_body_fewshot.get(cat_key, [])
+            if fewshot_blocks:
+                r1_person_text += (
+                    "\n\n=== REFERENCE BODY_ANALYSIS EXAMPLES "
+                    "(delivery_v1 spec, shape only) ===\n"
+                    "These are CANONICAL body_analysis dicts from other "
+                    "shots — use them as STRUCTURE reference only. Your "
+                    "output must match this SHAPE but describe the "
+                    "CURRENT person in the CURRENT shot (do NOT copy the "
+                    "text).\n"
+                )
+                for src, ba in fewshot_blocks:
+                    r1_person_text += (
+                        f"\n-- example: {src} --\n"
+                        + json.dumps(ba, ensure_ascii=False)
+                        + "\n"
+                    )
+                r1_person_text += (
+                    "\nEnd of examples. Now output YOUR body_analysis "
+                    "for person_index={pidx} in the CURRENT shot.\n"
+                ).format(pidx=pidx)
             messages_r1 = [
                 {"role": "system", "content": system_prompt},
                 {"role": "user",   "content": [
