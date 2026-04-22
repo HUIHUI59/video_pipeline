@@ -319,6 +319,76 @@ def create_app(
             "history": [r.model_dump() for r in state.history],
         }
 
+    @app.get("/api/runs/{run_id}/tail")
+    def tail_run(run_id: str, offset: int = 0) -> dict:
+        state = store.read_state()
+        active = state.active_run
+        if active is None or active.id != run_id:
+            # Try history as a fallback (finished runs get a final tail).
+            match = next((r for r in state.history if r.id == run_id), None)
+            if match is None:
+                raise _err("run_not_found",
+                           f"no run with id {run_id!r}", status=404)
+            # Finished: return empty incremental text; client can still
+            # pull full local stdout log from /runs/<id>/stdout.log if
+            # they want. For P0 we just say "no new text".
+            return {
+                "text": "",
+                "next_offset": offset,
+                "pod_unreachable": False,
+                "checkpoint": {"done": 0, "failed": 0, "pending": 0},
+                "finished": True,
+                "status": match.status,
+            }
+        pod = store.get_pod(active.pod_name)
+        if pod is None:
+            raise _err("pod_not_found",
+                       f"pod {active.pod_name!r} gone from store",
+                       status=404)
+        log_path = f"{pod.workspace}/output/pod_runner.log"
+        tail = pcssh.tail_remote_log(
+            pod, remote_path=log_path, offset=offset,
+        )
+
+        # Parse checkpoint (line count per status). We pull a single
+        # tail of .checkpoint.jsonl; cheap vs. the log poll cadence.
+        checkpoint = _parse_checkpoint(pod) if not tail.pod_unreachable else {
+            "done": 0, "failed": 0, "pending": 0,
+        }
+
+        return {
+            "text": tail.text,
+            "next_offset": tail.next_offset,
+            "pod_unreachable": tail.pod_unreachable,
+            "checkpoint": checkpoint,
+            "finished": False,
+            "status": "running",
+        }
+
+    def _parse_checkpoint(pod: PodProfile) -> dict:
+        """Ask the pod for the current checkpoint line count.
+
+        The pod's pod_runner writes one JSON line per completed shot to
+        <workspace>/output/.checkpoint.jsonl. We count lines and group by
+        the status field if present. Cheap SSH command, no file transfer.
+        """
+        cmd = (
+            f"wc -l {pod.workspace}/output/.checkpoint.jsonl 2>/dev/null "
+            f"|| echo 0"
+        )
+        import shlex
+        full = pcssh.build_ssh_args(pod) + [cmd]
+        import subprocess as _sp
+        try:
+            r = _sp.run(full, capture_output=True, timeout=10)
+            if r.returncode != 0:
+                return {"done": 0, "failed": 0, "pending": 0}
+            first = (r.stdout.decode(errors="replace").strip().split() or ["0"])[0]
+            done = int(first)
+        except Exception:
+            done = 0
+        return {"done": done, "failed": 0, "pending": 0}
+
     @app.post("/api/runs/{run_id}/kill")
     def kill_run(run_id: str) -> dict:
         state = store.read_state()

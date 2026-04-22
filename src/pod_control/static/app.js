@@ -529,6 +529,101 @@ document
     startRunPolling();
   });
 
+// ── Monitor tab state ───────────────────────────────────────────────
+
+const monitorState = {
+  runId: null,
+  offset: 0,
+  timer: null,
+};
+
+function monitorStop() {
+  if (monitorState.timer) clearInterval(monitorState.timer);
+  monitorState.timer = null;
+}
+
+function monitorLoop() {
+  monitorStop();
+  monitorState.timer = setInterval(monitorPoll, 2000);
+}
+
+async function monitorInit() {
+  monitorStop();
+  try {
+    const { active_run } = await jsonOrThrow(await fetch("/api/runs/active"));
+    if (!active_run) {
+      $("#monitor-summary").innerHTML = `<span class="muted">no active run</span>`;
+      $("#monitor-status").textContent = "";
+      $("#monitor-log").textContent = "";
+      $("#monitor-checkpoint").innerHTML = `<span class="muted">—</span>`;
+      monitorState.runId = null;
+      monitorState.offset = 0;
+      return;
+    }
+    monitorState.runId = active_run.id;
+    monitorState.offset = 0;
+    $("#monitor-log").textContent = "";
+    $("#monitor-summary").innerHTML = `
+      <dl class="run-meta">
+        <div><dt>id</dt><dd>${active_run.id}</dd></div>
+        <div><dt>batch</dt><dd>${active_run.batch_name}</dd></div>
+        <div><dt>pod</dt><dd>${active_run.pod_name}</dd></div>
+        <div><dt>status</dt><dd class="run-status ${active_run.status}">${active_run.status}</dd></div>
+        <div><dt>pid</dt><dd>${active_run.pid ?? "—"}</dd></div>
+        <div><dt>started</dt><dd>${fmtEpoch(active_run.started_at)}</dd></div>
+      </dl>`;
+    await monitorPoll();
+    monitorLoop();
+  } catch (err) {
+    $("#monitor-summary").textContent = err.message;
+  }
+}
+
+async function monitorPoll() {
+  if (!monitorState.runId) return;
+  try {
+    const r = await fetch(
+      `/api/runs/${encodeURIComponent(monitorState.runId)}/tail?offset=${monitorState.offset}`
+    );
+    const body = await jsonOrThrow(r);
+
+    // Append new log text.
+    if (body.text) {
+      const pre = $("#monitor-log");
+      pre.textContent += body.text;
+      if ($("#monitor-autoscroll").checked) {
+        pre.scrollTop = pre.scrollHeight;
+      }
+    }
+    monitorState.offset = body.next_offset;
+    $("#monitor-offset").textContent = `offset ${body.next_offset}`;
+
+    // Checkpoint.
+    const ck = body.checkpoint || {};
+    $("#monitor-checkpoint").innerHTML = `
+      <span>done: <b>${ck.done ?? 0}</b></span> ·
+      <span>failed: <b>${ck.failed ?? 0}</b></span> ·
+      <span>pending: <b>${ck.pending ?? 0}</b></span>`;
+
+    // Status.
+    const status = body.pod_unreachable
+      ? "pod unreachable"
+      : (body.finished ? body.status : "running");
+    $("#monitor-status").textContent = status;
+
+    if (body.finished) {
+      monitorStop();
+      await refreshRuns();   // pull history
+    }
+  } catch (err) {
+    $("#monitor-status").textContent = err.message;
+  }
+}
+
+document
+  .querySelector('nav button[data-tab="monitor"]')
+  .addEventListener("click", monitorInit);
+
 // ── Bootstrap --------------------------------------------------------
 
 renderCategoryChecks();

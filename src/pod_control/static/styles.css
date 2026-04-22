@@ -383,6 +383,29 @@ main {
 
 .panel + .panel { margin-top: 16px; }
 
+#monitor-log {
+  background: #050608;
+  color: #cbd3df;
+  padding: 12px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  max-height: 480px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 0;
+}
+
+.log-header {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 footer {
   position: fixed;
   bottom: 0;

@@ -133,7 +133,29 @@
       </section>
     </section>
     <section id="tab-monitor" class="tab">
-      <p class="placeholder">Monitor — M6 里实现 (log tail + checkpoint counter)</p>
+      <section class="panel">
+        <h2>Active run <small class="muted" id="monitor-status"></small></h2>
+        <div id="monitor-summary" class="muted">no active run</div>
+      </section>
+
+      <section class="panel">
+        <h2>Checkpoint</h2>
+        <div id="monitor-checkpoint" class="run-meta">
+          <span class="muted">—</span>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Log <small class="muted">(pod_runner.log, 2s polling)</small></h2>
+        <div class="log-header">
+          <label>
+            <input type="checkbox" id="monitor-autoscroll" checked />
+            auto-scroll
+          </label>
+          <span id="monitor-offset" class="muted">offset 0</span>
+        </div>
+        <pre id="monitor-log"></pre>
+      </section>
     </section>
   </main>
 
