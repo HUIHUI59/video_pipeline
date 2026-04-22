@@ -336,6 +336,53 @@ main {
 .test-dot.ok { background: var(--ok); }
 .test-dot.err { background: var(--err); }
 
+.run-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+
+.run-form label {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 13px;
+}
+
+.run-form select,
+.run-form input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 6px 10px;
+  border-radius: 4px;
+  min-width: 200px;
+}
+
+.run-form button {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border: none;
+  padding: 6px 14px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.run-form button[disabled] { opacity: 0.4; cursor: not-allowed; }
+#run-kill-btn { background: var(--err); }
+
+.run-meta { font-size: 12px; line-height: 1.6; }
+.run-meta dt { color: var(--muted); display: inline-block; width: 110px; }
+.run-meta dd { display: inline; margin: 0; }
+.run-meta dl > div { margin-bottom: 2px; }
+.run-status { text-transform: uppercase; font-weight: 600; }
+.run-status.running { color: var(--accent); }
+.run-status.done    { color: var(--ok); }
+.run-status.failed  { color: var(--err); }
+.run-status.killed  { color: var(--err); }
+
+.panel + .panel { margin-top: 16px; }
+
 footer {
   position: fixed;
   bottom: 0;

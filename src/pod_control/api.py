@@ -18,6 +18,7 @@ from pydantic import BaseModel, field_validator
 
 from . import filter as pcfilter
 from . import ssh as pcssh
+from .runner import Runner, RunnerError
 from .store import Batch, FilterParams, PodProfile, Store, StoreError
 
 
@@ -37,6 +38,12 @@ class SaveBatchRequest(BaseModel):
                 f"batch name must be alnum / - / _ only, got {v!r}"
             )
         return v
+
+
+class LaunchRunRequest(BaseModel):
+    batch_name: str
+    pod_name: str
+    preset_path: str | None = None
 
 
 class PodUpsertRequest(BaseModel):
@@ -84,6 +91,7 @@ def create_app(
     data_root_p = Path(data_root)
     output_root_p = Path(output_root) if output_root else None
     store = Store(data_root_p)
+    runner = Runner(store)
 
     # ── health + index ---------------------------------------------------
 
@@ -262,6 +270,71 @@ def create_app(
             "latency_ms": result.latency_ms,
             "message": result.message,
         }
+
+    # ── M5 Runs ---------------------------------------------------------
+
+    @app.post("/api/runs", status_code=201)
+    def launch_run(req: LaunchRunRequest) -> dict:
+        batch = store.get_batch(req.batch_name)
+        if batch is None:
+            raise _err("batch_not_found",
+                       f"batch {req.batch_name!r} not found", status=404)
+        if batch.status != "ready":
+            raise _err("batch_not_ready",
+                       f"batch is {batch.status}; only ready batches launch",
+                       status=409)
+        pod = store.get_pod(req.pod_name)
+        if pod is None:
+            raise _err("pod_not_found",
+                       f"pod {req.pod_name!r} not found", status=404)
+        try:
+            rec = runner.launch(batch, pod, preset_path=req.preset_path)
+        except RunnerError as ex:
+            code = ("run_already_active"
+                    if "run_already_active" in str(ex)
+                    else "runner_error")
+            raise _err(code, str(ex), status=409 if code == "run_already_active" else 500)
+        # Flip batch to running (atomic overwrite).
+        batch.status = "running"
+        batch.last_run_id = rec.id
+        store.save_batch(batch, overwrite=True)
+        return rec.model_dump()
+
+    @app.get("/api/runs/active")
+    def active_run() -> dict:
+        # Poll first — finalize any run whose subprocess has exited.
+        runner.poll_active()
+        state = store.read_state()
+        return {
+            "active_run": state.active_run.model_dump()
+            if state.active_run else None,
+        }
+
+    @app.get("/api/runs")
+    def list_runs() -> dict:
+        state = store.read_state()
+        active = [state.active_run.model_dump()] if state.active_run else []
+        return {
+            "active": active,
+            "history": [r.model_dump() for r in state.history],
+        }
+
+    @app.post("/api/runs/{run_id}/kill")
+    def kill_run(run_id: str) -> dict:
+        state = store.read_state()
+        if state.active_run is None or state.active_run.id != run_id:
+            raise _err("run_not_found",
+                       f"no active run with id {run_id!r}", status=404)
+        try:
+            killed = runner.kill_active()
+        except RunnerError as ex:
+            raise _err("runner_error", str(ex), status=500)
+        # Flip batch back to failed so user can re-queue a fresh one.
+        batch = store.get_batch(killed.batch_name)
+        if batch is not None:
+            batch.status = "failed"
+            store.save_batch(batch, overwrite=True)
+        return killed.model_dump()
 
     # ── clip streaming (Range-supporting, for preview) ------------------
 

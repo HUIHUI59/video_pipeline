@@ -396,6 +396,139 @@ $("#pod-delete-btn").addEventListener("click", async () => {
   }
 });
 
+// ── Run tab state ────────────────────────────────────────────────
+
+let runPollTimer = null;
+
+function fmtEpoch(t) {
+  if (!t) return "—";
+  const d = new Date(t * 1000);
+  return d.toLocaleString();
+}
+
+async function populateRunSelectors() {
+  const [batchesR, podsR] = await Promise.all([
+    fetch("/api/batches"), fetch("/api/pods"),
+  ]);
+  const batches = (await batchesR.json()).batches || [];
+  const pods = (await podsR.json()).pods || [];
+  const batchSel = $("#run-batch-sel");
+  batchSel.innerHTML = batches
+    .filter((b) => b.status === "ready")
+    .map((b) => `<option value="${b.name}">${b.name} (${b.movie}, ${b.shot_count})</option>`)
+    .join("");
+  const podSel = $("#run-pod-sel");
+  podSel.innerHTML = pods
+    .map((p) => `<option value="${p.name}">${p.name} (${p.user}@${p.host})</option>`)
+    .join("");
+}
+
+function renderActive(active) {
+  const panel = $("#active-run-panel");
+  const killBtn = $("#run-kill-btn");
+  if (!active) {
+    panel.innerHTML = `<span class="muted">none</span>`;
+    killBtn.disabled = true;
+    killBtn.dataset.runId = "";
+    return;
+  }
+  panel.innerHTML = `
+    <dl class="run-meta">
+      <div><dt>id</dt><dd>${active.id}</dd></div>
+      <div><dt>batch</dt><dd>${active.batch_name}</dd></div>
+      <div><dt>pod</dt><dd>${active.pod_name}</dd></div>
+      <div><dt>status</dt><dd class="run-status ${active.status}">${active.status}</dd></div>
+      <div><dt>pid</dt><dd>${active.pid ?? "—"}</dd></div>
+      <div><dt>started</dt><dd>${fmtEpoch(active.started_at)}</dd></div>
+    </dl>`;
+  killBtn.disabled = false;
+  killBtn.dataset.runId = active.id;
+}
+
+function renderHistory(history) {
+  const ul = $("#run-history");
+  if (!history.length) {
+    ul.innerHTML = `<li class="muted">no runs yet</li>`;
+    return;
+  }
+  ul.innerHTML = history
+    .map((h) => `
+      <li>
+        <span>${h.id}</span>
+        <span class="count">
+          ${h.batch_name} · <span class="run-status ${h.status}">${h.status}</span>
+          · exit=${h.exit_code ?? "—"}
+        </span>
+      </li>`)
+    .join("");
+}
+
+async function refreshRuns() {
+  try {
+    const data = await jsonOrThrow(await fetch("/api/runs"));
+    renderActive(data.active[0] || null);
+    renderHistory(data.history || []);
+  } catch (err) {
+    $("#active-run-panel").textContent = err.message;
+  }
+}
+
+function startRunPolling() {
+  if (runPollTimer) return;
+  runPollTimer = setInterval(refreshRuns, 3000);
+}
+function stopRunPolling() {
+  if (runPollTimer) clearInterval(runPollTimer);
+  runPollTimer = null;
+}
+
+$("#run-launch-btn").addEventListener("click", async () => {
+  const msg = $("#run-form-msg");
+  msg.textContent = "launching…";
+  try {
+    const r = await fetch("/api/runs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        batch_name: $("#run-batch-sel").value,
+        pod_name: $("#run-pod-sel").value,
+        preset_path: $("#run-preset").value.trim() || null,
+      }),
+    });
+    const data = await jsonOrThrow(r);
+    msg.textContent = `launched run ${data.id}`;
+    await refreshRuns();
+    await populateRunSelectors();
+    startRunPolling();
+  } catch (err) {
+    msg.textContent = err.message;
+  }
+});
+
+$("#run-kill-btn").addEventListener("click", async () => {
+  const runId = $("#run-kill-btn").dataset.runId;
+  if (!runId) return;
+  if (!confirm(`kill run ${runId}?`)) return;
+  try {
+    const r = await fetch(`/api/runs/${encodeURIComponent(runId)}/kill`,
+                          { method: "POST" });
+    await jsonOrThrow(r);
+    await refreshRuns();
+    await populateRunSelectors();
+  } catch (err) {
+    $("#run-form-msg").textContent = err.message;
+  }
+});
+
+// Refresh the selectors + poll whenever user switches to the Run tab.
+document
+  .querySelector('nav button[data-tab="run"]')
+  .addEventListener("click", async () => {
+    await populateRunSelectors();
+    await refreshRuns();
+    startRunPolling();
+  });
+
 // ── Bootstrap --------------------------------------------------------
 
 renderCategoryChecks();
@@ -404,3 +537,5 @@ pingHealth();
 loadMovies();
 loadBatches();
 loadPods();
+populateRunSelectors();
+refreshRuns();

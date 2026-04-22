@@ -104,7 +104,33 @@
       </div>
     </section>
     <section id="tab-run" class="tab">
-      <p class="placeholder">Run — M5 里实现 (launcher + kill button)</p>
+      <section class="panel" id="run-launcher">
+        <h2>Launch run</h2>
+        <div class="run-form">
+          <label>batch
+            <select id="run-batch-sel"></select>
+          </label>
+          <label>pod
+            <select id="run-pod-sel"></select>
+          </label>
+          <label>preset (optional)
+            <input id="run-preset" type="text" placeholder="configs/runpod.yaml" />
+          </label>
+          <button id="run-launch-btn">Launch</button>
+          <button id="run-kill-btn" disabled>Kill active</button>
+          <span id="run-form-msg" class="muted"></span>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Active run</h2>
+        <div id="active-run-panel" class="muted">none</div>
+      </section>
+
+      <section class="panel">
+        <h2>History <small class="muted">(last 20)</small></h2>
+        <ul id="run-history" class="list"></ul>
+      </section>
     </section>
     <section id="tab-monitor" class="tab">
       <p class="placeholder">Monitor — M6 里实现 (log tail + checkpoint counter)</p>
