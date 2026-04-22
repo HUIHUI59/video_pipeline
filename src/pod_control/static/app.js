@@ -624,11 +624,63 @@ document
   .querySelector('nav button[data-tab="monitor"]')
   .addEventListener("click", monitorInit);
 
+// ── Output-root setting ─────────────────────────────────────────────
+
+async function loadOutputRoot() {
+  try {
+    const data = await jsonOrThrow(
+      await fetch("/api/settings/output-root")
+    );
+    const sel = $("#output-root-sel");
+    const opts = [...new Set([data.current, ...data.candidates].filter(Boolean))];
+    sel.innerHTML = opts
+      .map((p) => `<option value="${p}" ${p === data.current ? "selected" : ""}>${p}</option>`)
+      .join("");
+    if (!opts.length) {
+      sel.innerHTML = `<option value="">(no candidates)</option>`;
+    }
+    $("#output-root-input").value = "";
+    $("#output-root-msg").textContent = data.current
+      ? `current: ${data.current}`
+      : "not configured";
+  } catch (err) {
+    $("#output-root-msg").textContent = err.message;
+  }
+}
+
+$("#output-root-apply").addEventListener("click", async () => {
+  const typed = $("#output-root-input").value.trim();
+  const picked = $("#output-root-sel").value;
+  const path = typed || picked;
+  if (!path) {
+    $("#output-root-msg").textContent = "pick from list or type a path";
+    return;
+  }
+  $("#output-root-msg").textContent = "applying…";
+  try {
+    const r = await fetch("/api/settings/output-root", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    });
+    const data = await jsonOrThrow(r);
+    $("#output-root-msg").textContent = `switched to ${data.current}`;
+    // Reload dependent panels so the new root takes effect visibly.
+    await loadOutputRoot();
+    await loadMovies();
+    await loadBatches();
+    pingHealth();
+  } catch (err) {
+    $("#output-root-msg").textContent = err.message;
+  }
+});
+
 // ── Bootstrap --------------------------------------------------------
 
 renderCategoryChecks();
 resetPodForm();
 pingHealth();
+loadOutputRoot();
 loadMovies();
 loadBatches();
 loadPods();

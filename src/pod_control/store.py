@@ -97,6 +97,7 @@ class RunRecord(BaseModel):
 class ActiveState(BaseModel):
     active_run: RunRecord | None = None
     history: list[RunRecord] = Field(default_factory=list)
+    current_output_root: str | None = None
 
 
 # ── Store error + helpers ──

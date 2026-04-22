@@ -92,6 +92,36 @@ main {
 
 .muted { color: var(--muted); font-size: 12px; }
 
+.output-root-panel { margin-bottom: 16px; }
+
+.output-root-form {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.output-root-form select,
+.output-root-form input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 6px 10px;
+  border-radius: 4px;
+  min-width: 260px;
+}
+
+.output-root-form input { flex: 1; }
+
+.output-root-form button {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border: none;
+  padding: 6px 14px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
 .prepare-layout {
   display: grid;
   grid-template-columns: 260px 1fr;

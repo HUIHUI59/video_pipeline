@@ -46,6 +46,10 @@ class LaunchRunRequest(BaseModel):
     preset_path: str | None = None
 
 
+class OutputRootRequest(BaseModel):
+    path: str
+
+
 class PodUpsertRequest(BaseModel):
     name: str
     host: str
@@ -89,36 +93,113 @@ def create_app(
         static_dir = Path(__file__).resolve().parent / "static"
 
     data_root_p = Path(data_root)
-    output_root_p = Path(output_root) if output_root else None
+    cli_output_root_p = Path(output_root) if output_root else None
     store = Store(data_root_p)
     runner = Runner(store)
+
+    def _current_output_root() -> Path | None:
+        # Persisted override beats CLI default.
+        state = store.read_state()
+        if state.current_output_root:
+            return Path(state.current_output_root)
+        return cli_output_root_p
+
+    def _scan_output_root_candidates() -> list[str]:
+        """Scan parent of CLI default for siblings containing manifest/."""
+        seen: set[str] = set()
+        candidates: list[str] = []
+        roots_to_scan: list[Path] = []
+        if cli_output_root_p is not None:
+            roots_to_scan.append(cli_output_root_p)
+            roots_to_scan.append(cli_output_root_p.parent)
+        # Also include the currently-active root if user already overrode.
+        cur = _current_output_root()
+        if cur is not None:
+            roots_to_scan.append(cur)
+            roots_to_scan.append(cur.parent)
+        for parent in roots_to_scan:
+            if not parent.exists():
+                continue
+            try:
+                children = list(parent.iterdir())
+            except PermissionError:
+                continue
+            # The path itself counts if it has manifest/.
+            if (parent / "manifest").is_dir():
+                p = str(parent.resolve())
+                if p not in seen:
+                    seen.add(p)
+                    candidates.append(p)
+            for child in children:
+                if not child.is_dir():
+                    continue
+                if (child / "manifest").is_dir():
+                    p = str(child.resolve())
+                    if p not in seen:
+                        seen.add(p)
+                        candidates.append(p)
+        return sorted(candidates)
 
     # ── health + index ---------------------------------------------------
 
     @app.get("/api/health")
     def health() -> dict:
+        cur = _current_output_root()
         return {
             "ok": True,
             "module": "pod_control",
             "version": "0.1.0",
             "data_root": str(data_root_p),
-            "output_root": str(output_root_p) if output_root_p else None,
+            "output_root": str(cur) if cur else None,
         }
 
     @app.get("/")
     def index() -> FileResponse:
         return FileResponse(static_dir / "index.html")
 
+    @app.get("/favicon.ico")
+    def favicon() -> Response:
+        return Response(status_code=204)
+
+    # ── Settings --------------------------------------------------------
+
+    @app.get("/api/settings/output-root")
+    def get_output_root() -> dict:
+        cur = _current_output_root()
+        return {
+            "current": str(cur) if cur else None,
+            "cli_default": (
+                str(cli_output_root_p) if cli_output_root_p else None
+            ),
+            "candidates": _scan_output_root_candidates(),
+        }
+
+    @app.post("/api/settings/output-root")
+    def set_output_root(req: OutputRootRequest) -> dict:
+        p = Path(req.path).expanduser().resolve()
+        if not p.is_dir():
+            raise _err("invalid_path", f"{p} is not a directory", status=400)
+        if not (p / "manifest").is_dir():
+            raise _err(
+                "invalid_path",
+                f"{p} has no manifest/ subdir — not a pipeline output root",
+                status=400,
+            )
+        with store.state_lock() as state:
+            state.current_output_root = str(p)
+        return {"current": str(p)}
+
     # ── M3 Prepare ------------------------------------------------------
 
     def _require_output_root() -> Path:
-        if output_root_p is None:
+        cur = _current_output_root()
+        if cur is None:
             raise _err(
                 "output_root_not_configured",
-                "--output-root was not set on the CLI",
+                "output_root is not set (CLI default or runtime override)",
                 status=500,
             )
-        return output_root_p
+        return cur
 
     @app.get("/api/movies")
     def list_movies() -> dict:
