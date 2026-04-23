@@ -66,17 +66,29 @@ def _scan_file(path: Path, strict: bool):
     return valid, bad
 
 
-def _process_one(path: Path, *, apply: bool, strict: bool) -> dict:
+def _process_one(path: Path, *, apply: bool, strict: bool,
+                 min_idle_sec: float, force: bool) -> dict:
     valid, bad = _scan_file(path, strict)
+    age_sec = time.time() - path.stat().st_mtime
+    in_use = age_sec < min_idle_sec
     stat = {
         "file": str(path),
         "valid": len(valid),
         "bad": len(bad),
         "examples": bad[:3],
         "wrote": False,
+        "skipped_in_use": False,
+        "age_sec": age_sec,
         "backup": None,
     }
     if not bad:
+        return stat
+    if apply and in_use and not force:
+        # CRITICAL: Stage 4 worker may have an open fd on this inode.
+        # rename() doesn't affect that fd — it would keep writing into
+        # what becomes our .bak file, and our new file would never see
+        # those rows. Refuse unless --force.
+        stat["skipped_in_use"] = True
         return stat
     if apply:
         ts = time.strftime("%Y%m%d%H%M%S")
@@ -115,6 +127,15 @@ def main() -> int:
     p.add_argument("--strict", action="store_true",
                    help="also require ManifestEntry schema validation, "
                         "not just JSON parse-ability")
+    p.add_argument("--min-idle-sec", type=float, default=60.0,
+                   help="refuse --apply on files modified within the last N "
+                        "seconds (Stage 4 worker probably has an open fd). "
+                        "Default 60. Use --force to override.")
+    p.add_argument("--force", action="store_true",
+                   help="ignore --min-idle-sec and rewrite even files that "
+                        "look in-use. WARNING: data loss if a writer is "
+                        "still appending — Linux rename() doesn't reach the "
+                        "writer's open fd; new appends go to the .bak file.")
     args = p.parse_args()
 
     target = args.path.expanduser().resolve()
@@ -126,16 +147,24 @@ def main() -> int:
     total_files = 0
     total_bad = 0
     total_valid = 0
+    skipped_in_use = 0
     files_with_bad: list[dict] = []
     for path in _iter_targets(target):
-        stat = _process_one(path, apply=args.apply, strict=args.strict)
+        stat = _process_one(path, apply=args.apply, strict=args.strict,
+                            min_idle_sec=args.min_idle_sec, force=args.force)
         total_files += 1
         total_valid += stat["valid"]
         total_bad += stat["bad"]
         if stat["bad"] == 0:
             continue
         files_with_bad.append(stat)
-        action = "REWROTE" if stat["wrote"] else "would drop"
+        if stat["skipped_in_use"]:
+            skipped_in_use += 1
+            action = f"SKIPPED (in-use, age={stat['age_sec']:.1f}s)"
+        elif stat["wrote"]:
+            action = "REWROTE"
+        else:
+            action = "would drop"
         print(f"  {action} {stat['bad']:>4} bad of "
               f"{stat['valid'] + stat['bad']:>5} lines  in  {Path(stat['file']).name}")
         for ln, reason in stat["examples"]:
@@ -147,6 +176,12 @@ def main() -> int:
     print(f"summary: {total_files} files scanned, "
           f"{len(files_with_bad)} need(ed) repair, "
           f"{total_bad} bad lines, {total_valid} valid lines")
+    if skipped_in_use:
+        print(f"WARNING: {skipped_in_use} file(s) skipped because they were "
+              f"modified within the last {args.min_idle_sec}s.")
+        print("         Stop Stage 4 first, then re-run.")
+        print("         (Rewriting an in-use file would lose any rows the "
+              "writer appends after the rename.)")
     if not args.apply and total_bad:
         print()
         print("Re-run with --apply to actually fix the files.")
