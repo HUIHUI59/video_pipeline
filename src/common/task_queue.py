@@ -431,7 +431,21 @@ class TaskQueue:
           - .claim.*  = 已认领（O_CREAT|O_EXCL 原子，跨机可靠）
           - .fail.*   = 失败标记（每次 mark_failed 追加一个），计数 ≥3 视为 error
 
-        这样 **运行时完全不会写 60MB 的主 JSON**，彻底消掉 SMB 并发写竞争。
+        Performance: queue.json grows to 50+MB at 168k tasks. Re-parsing
+        on every call burned ~2-6s and made main process the throughput
+        ceiling (8 workers idle waiting). We now load tasks list + done
+        set ONCE into memory, iterate from a cursor on subsequent calls.
+        Cross-process atomicity is preserved by _try_claim_file's
+        O_CREAT|O_EXCL — we still skip already-claimed srcs.
+
+        Cache invariants:
+          - tasks list is from init_queue's static snapshot (never grows
+            mid-run for stage 4) → safe to cache forever
+          - done_set is updated locally in mark_done; remote workers'
+            done updates only matter if we'd otherwise re-claim a done
+            task — _try_claim_file already handles that
+          - cursor advances monotonically; we never revisit a skipped src
+            in the same process (acceptable: another machine claims it)
         """
         try:
             self._acquire()
@@ -440,25 +454,29 @@ class TaskQueue:
             return None
         try:
             try:
-                data  = self._load()
-                tasks = data.get("tasks", {})
-                if not isinstance(tasks, dict):
-                    log.warning("claim_next: tasks 非 dict（JSON 损坏？），返回 None")
-                    return None
-                done_set = set(self._done_log_read().keys())
+                # Lazy-init the cache on first call.
+                if not hasattr(self, "_task_keys_cache"):
+                    data = self._load()
+                    tasks = data.get("tasks", {})
+                    if not isinstance(tasks, dict):
+                        log.warning("claim_next: tasks 非 dict（JSON 损坏？），返回 None")
+                        return None
+                    self._task_keys_cache = [
+                        k for k, v in tasks.items() if isinstance(v, dict)
+                    ]
+                    self._done_set_cache = set(self._done_log_read().keys())
+                    self._task_cursor = 0
+                    log.info(f"claim_next cache: {len(self._task_keys_cache)} tasks, "
+                             f"{len(self._done_set_cache)} done")
 
-                for src, t in tasks.items():
-                    # t 可能因 JSON 损坏不是 dict——防御一下
-                    if not isinstance(t, dict):
+                # Iterate from the cursor (monotonic — never revisit).
+                while self._task_cursor < len(self._task_keys_cache):
+                    src = self._task_keys_cache[self._task_cursor]
+                    self._task_cursor += 1
+                    if src in self._done_set_cache:
                         continue
-                    if src in done_set:
-                        continue
-                    # 达到最大重试次数 → 视为永久失败，跳过
                     if self._fail_count(src) >= 3:
                         continue
-                    # In-process dedupe: when multi-worker in one process,
-                    # all threads share worker_id. Skip srcs another thread
-                    # in this process already claimed.
                     with self._in_flight_lock:
                         if src in self._in_flight:
                             continue
@@ -507,6 +525,9 @@ class TaskQueue:
             ok = self._done_log_append(src, dst)
         except Exception as e:
             log.error(f"mark_done done-log 异常 ({e}) | src={src}")
+        # Keep cache in sync so re-claim_next never returns this src.
+        if hasattr(self, "_done_set_cache"):
+            self._done_set_cache.add(src)
         try:
             self._release_claim(src)
         except Exception:
