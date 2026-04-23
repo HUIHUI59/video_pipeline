@@ -1370,3 +1370,83 @@ body.modal-open { overflow: hidden; }
 @media (max-width: 700px) {
   .config-section-body { grid-template-columns: 1fr; }
 }
+
+/* ── Inline export panel (expands beneath batch row) ─────── */
+
+li.export-inline {
+  cursor: default;
+  background: var(--bg-lift) !important;
+  padding: 0 !important;
+  border-left: 3px solid var(--accent);
+  display: block;
+}
+li.export-inline:hover { background: var(--bg-lift) !important; }
+
+.export-inline-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+}
+.export-inline-title {
+  font-size: 13px;
+  color: var(--text);
+}
+.export-inline-title strong { color: var(--accent); }
+
+.export-inline-form .field { gap: 4px; }
+.export-inline-form .field label {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.export-inline-path {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 5px;
+  font-size: 12px;
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+}
+.export-inline-path:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.export-inline-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.export-inline-actions .btn-primary,
+.export-inline-actions .btn-secondary {
+  padding: 5px 12px;
+  font-size: 12px;
+  height: 28px;
+}
+.export-inline-msg { margin-left: auto; font-size: 11px; }
+
+.export-inline-result:empty { display: none; }
+.export-inline-result {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 8px 10px;
+  font-size: 11px;
+}
+
+/* ── Preset editor: hidden-sections note ─────────────────── */
+
+.preset-editor-note {
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: var(--panel-lift);
+  border: 1px dashed var(--border-strong);
+  border-radius: 6px;
+  font-size: 11px;
+  font-style: italic;
+}

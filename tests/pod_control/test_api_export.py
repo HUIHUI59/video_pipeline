@@ -76,12 +76,29 @@ def test_export_rejects_system_root(client):
     assert r.status_code == 400
 
 
-def test_export_rejects_dest_inside_output_root(client, tmp_path):
+def test_export_rejects_exact_output_root(client, tmp_path):
     c, _ = client
     _mk_batch(c)
-    inside = tmp_path / "out" / "exported"
-    r = c.post("/api/batches/b1/export", json={"dest_path": str(inside)})
+    r = c.post("/api/batches/b1/export",
+               json={"dest_path": str(tmp_path / "out")})
     assert r.status_code == 400
+
+
+def test_export_rejects_output_root_clips_subdir(client, tmp_path):
+    c, _ = client
+    _mk_batch(c)
+    r = c.post("/api/batches/b1/export",
+               json={"dest_path": str(tmp_path / "out" / "clips")})
+    assert r.status_code == 400
+
+
+def test_export_allows_arbitrary_subdir_of_output_root(client, tmp_path):
+    """Common case: user wants to share inside the same data drive."""
+    c, _ = client
+    _mk_batch(c)
+    sibling = tmp_path / "out" / "share_to_friend"
+    r = c.post("/api/batches/b1/export", json={"dest_path": str(sibling)})
+    assert r.status_code == 200, r.text
 
 
 def test_export_copies_clips_organized_by_movie(client, tmp_path):

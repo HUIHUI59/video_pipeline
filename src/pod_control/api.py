@@ -408,12 +408,23 @@ def create_app(
             raise _err("invalid_dest",
                        f"dest_path may not be a system root: {dest_resolved}",
                        status=400)
-        # Block writing into the source output_root itself.
+        # Block writing exactly to output_root itself or to its source
+        # subdirs (clips/labels/manifest) where we'd overwrite originals.
+        # Sibling paths under the same parent are fine — that's the common
+        # "share to another folder on the same disk" use case.
         try:
-            if dest_resolved == out.resolve() or out.resolve() in dest_resolved.parents:
+            out_resolved = out.resolve()
+            if dest_resolved == out_resolved:
                 raise _err("invalid_dest",
-                           "dest_path may not equal or be inside output_root",
+                           f"dest_path equals current output_root ({out_resolved}); "
+                           "pick a different folder to avoid overwriting source clips",
                            status=400)
+            for sub in ("clips", "labels", "manifest"):
+                if dest_resolved == out_resolved / sub:
+                    raise _err("invalid_dest",
+                               f"dest_path equals output_root/{sub}; "
+                               "this would overwrite source data",
+                               status=400)
         except FileNotFoundError:
             pass
 

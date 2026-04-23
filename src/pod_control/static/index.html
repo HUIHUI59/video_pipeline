@@ -276,32 +276,6 @@
             type="button" title="Enable browser notifications">🔔 Notify</button>
   </footer>
 
-  <!-- Batch export modal -->
-  <div id="export-modal" class="modal-overlay" hidden>
-    <div class="modal-panel modal-panel-narrow">
-      <div class="modal-header">
-        <h3 id="export-modal-title">Export batch</h3>
-        <button id="export-modal-close" class="inline-btn" type="button">×</button>
-      </div>
-      <div id="export-modal-desc" class="muted"></div>
-      <div class="field">
-        <label for="export-modal-path">Destination folder (absolute path)</label>
-        <input id="export-modal-path" type="text"
-               placeholder="/mnt/share/batch_xxx" />
-      </div>
-      <label class="check-row-inline">
-        <input type="checkbox" id="export-modal-overwrite" />
-        overwrite existing files
-      </label>
-      <div id="export-modal-result" class="export-result"></div>
-      <div class="modal-footer">
-        <span id="export-modal-msg" class="muted"></span>
-        <button id="export-modal-go" class="btn-primary" type="button">Export</button>
-        <button id="export-modal-cancel" class="btn-secondary" type="button">Close</button>
-      </div>
-    </div>
-  </div>
-
   <script type="module" src="/static/app.js"></script>
 </body>
 </html>

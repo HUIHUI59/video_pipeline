@@ -248,7 +248,7 @@ async function loadBatches() {
       exportBtn.title = "export clips to a folder";
       exportBtn.addEventListener("click", (e) => {
         e.stopPropagation();
-        openExportModal(b);
+        _toggleExportPanel(li, b);
       });
       li.appendChild(exportBtn);
       const del = document.createElement("button");
@@ -1259,16 +1259,32 @@ function _renderConfigSection(parent, key, value, path, depth) {
   parent.appendChild(row);
 }
 
+// Sections in runpod.yaml that are auto-overridden at run launch by
+// PodProfile / output_root / batch.filter_params — hide them in the
+// editor so the user only sees what actually affects inference.
+const _PRESET_HIDDEN_KEYS = new Set(["pod", "paths", "filters"]);
+
 function _renderConfigForm(rootEl, parsed) {
   rootEl.innerHTML = "";
   for (const [k, v] of Object.entries(parsed)) {
+    if (_PRESET_HIDDEN_KEYS.has(k)) continue;
     _renderConfigSection(rootEl, k, v, [k], 0);
+  }
+  // Hint about hidden sections so the user knows nothing was lost.
+  const hidden = Object.keys(parsed).filter((k) => _PRESET_HIDDEN_KEYS.has(k));
+  if (hidden.length) {
+    const note = document.createElement("div");
+    note.className = "preset-editor-note muted";
+    note.textContent =
+      `Hidden (auto-overridden at launch): ${hidden.join(", ")}`;
+    rootEl.appendChild(note);
   }
 }
 
-/** Walk the rendered form, rebuild a parsed dict that mirrors original. */
-function _collectConfigForm(rootEl) {
-  const out = {};
+/** Walk the form, overlay values onto a deep-cloned `original` dict.
+ *  Sections hidden in the editor (pod/paths/filters) survive verbatim. */
+function _collectConfigForm(rootEl, original) {
+  const out = JSON.parse(JSON.stringify(original || {}));
   rootEl.querySelectorAll("input[data-path]").forEach((inp) => {
     const path = inp.dataset.path.split(".");
     let v;
@@ -1283,15 +1299,15 @@ function _collectConfigForm(rootEl) {
         v = parseInt(raw, 10);
       }
     } else {
-      // string or originally null
       v = inp.value;
       if (v === "" && inp.dataset.wasNull === "1") v = null;
     }
-    // Insert into nested out by path
     let cursor = out;
     for (let i = 0; i < path.length - 1; i++) {
       const key = path[i];
-      if (!(key in cursor) || typeof cursor[key] !== "object") cursor[key] = {};
+      if (!(key in cursor) || typeof cursor[key] !== "object" || Array.isArray(cursor[key])) {
+        cursor[key] = {};
+      }
       cursor = cursor[key];
     }
     cursor[path[path.length - 1]] = v;
@@ -1311,9 +1327,11 @@ function _initPresetEditor() {
   if (!editBtn || !editor) return;
 
   let currentName = null;
+  let currentOriginal = null;
 
   function open(name, parsed) {
     currentName = name;
+    currentOriginal = parsed;
     title.textContent = `Editing: ${name}`;
     msg.textContent = "";
     _renderConfigForm(formEl, parsed);
@@ -1324,6 +1342,7 @@ function _initPresetEditor() {
     editor.hidden = true;
     formEl.innerHTML = "";
     currentName = null;
+    currentOriginal = null;
   }
 
   editBtn.addEventListener("click", async () => {
@@ -1348,7 +1367,7 @@ function _initPresetEditor() {
   $("#preset-editor-save").addEventListener("click", async () => {
     if (!currentName) return;
     msg.textContent = "saving…";
-    const parsed = _collectConfigForm(formEl);
+    const parsed = _collectConfigForm(formEl, currentOriginal);
     try {
       const r = await fetch(`/api/configs/${encodeURIComponent(currentName)}`, {
         method: "PUT",
@@ -1367,53 +1386,64 @@ function _initPresetEditor() {
   });
 }
 
-// ── Batch export modal ──────────────────────────────────────────────
+// ── Inline batch export panel (expands beneath the batch row) ───────
 
-function openExportModal(batch) {
-  const modal = $("#export-modal");
-  if (!modal) return;
-  $("#export-modal-title").textContent = `Export batch: ${batch.name}`;
-  $("#export-modal-desc").textContent =
-    `${batch.movies.length} movie(s) · ${batch.shot_count} shot(s) total`;
-  $("#export-modal-path").value = "";
-  $("#export-modal-overwrite").checked = false;
-  $("#export-modal-msg").textContent = "";
-  $("#export-modal-result").innerHTML = "";
-  $("#export-modal-go").disabled = false;
-  modal.dataset.batch = batch.name;
-  modal.hidden = false;
-  document.body.classList.add("modal-open");
-  $("#export-modal-path").focus();
-}
-
-function _initExportModal() {
-  const modal = $("#export-modal");
-  if (!modal) return;
-  function close() {
-    modal.hidden = true;
-    document.body.classList.remove("modal-open");
+function _toggleExportPanel(batchLi, batch) {
+  // If already open beneath this row, close it.
+  const existing = batchLi.nextElementSibling;
+  if (existing && existing.classList.contains("export-inline")) {
+    existing.remove();
+    return;
   }
-  $("#export-modal-close").addEventListener("click", close);
-  $("#export-modal-cancel").addEventListener("click", close);
-  modal.addEventListener("click", (e) => { if (e.target === modal) close(); });
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && !modal.hidden) close();
+  // Close any other open export panel.
+  document.querySelectorAll("li.export-inline").forEach((li) => li.remove());
+
+  const panel = document.createElement("li");
+  panel.className = "export-inline";
+  panel.innerHTML = `
+    <form class="export-inline-form" autocomplete="off">
+      <div class="export-inline-title">
+        Export <strong>${_escapeHtml(batch.name)}</strong>
+        <span class="muted">· ${batch.movies.length} movie(s) · ${batch.shot_count} shot(s)</span>
+      </div>
+      <div class="field">
+        <label>Destination folder (absolute path)</label>
+        <input type="text" class="export-inline-path"
+               placeholder="/mnt/share/${batch.name}" />
+      </div>
+      <label class="check-row-inline">
+        <input type="checkbox" class="export-inline-overwrite" />
+        overwrite existing files
+      </label>
+      <div class="export-inline-actions">
+        <button type="submit" class="btn-primary export-inline-go">Export</button>
+        <button type="button" class="btn-secondary export-inline-close">Cancel</button>
+        <span class="muted export-inline-msg"></span>
+      </div>
+      <div class="export-inline-result"></div>
+    </form>
+  `;
+  batchLi.after(panel);
+  const pathInput = panel.querySelector(".export-inline-path");
+  pathInput.focus();
+
+  panel.querySelector(".export-inline-close").addEventListener("click", () => {
+    panel.remove();
   });
-  $("#export-modal-go").addEventListener("click", async () => {
-    const name = modal.dataset.batch;
-    const dest = $("#export-modal-path").value.trim();
-    const overwrite = $("#export-modal-overwrite").checked;
-    if (!dest) {
-      $("#export-modal-msg").textContent = "destination path required";
-      return;
-    }
-    const goBtn = $("#export-modal-go");
+  panel.querySelector("form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const dest = pathInput.value.trim();
+    const overwrite = panel.querySelector(".export-inline-overwrite").checked;
+    const msgEl = panel.querySelector(".export-inline-msg");
+    const goBtn = panel.querySelector(".export-inline-go");
+    const resultEl = panel.querySelector(".export-inline-result");
+    if (!dest) { msgEl.textContent = "destination path required"; return; }
     goBtn.disabled = true;
-    $("#export-modal-msg").textContent = "exporting… (may take a while)";
-    $("#export-modal-result").innerHTML = "";
+    msgEl.textContent = "exporting… (may take a while)";
+    resultEl.innerHTML = "";
     try {
       const r = await fetch(
-        `/api/batches/${encodeURIComponent(name)}/export`, {
+        `/api/batches/${encodeURIComponent(batch.name)}/export`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ dest_path: dest, overwrite }),
@@ -1421,15 +1451,15 @@ function _initExportModal() {
       );
       const body = await r.json();
       if (!r.ok) {
-        $("#export-modal-msg").textContent =
+        msgEl.textContent =
           body?.detail?.error?.message || `HTTP ${r.status}`;
         goBtn.disabled = false;
         return;
       }
-      $("#export-modal-msg").textContent = "done";
+      msgEl.textContent = "done";
       const errs = (body.errors || []).slice(0, 5)
-        .map((e) => `<li>${_escapeHtml(e)}</li>`).join("");
-      $("#export-modal-result").innerHTML = `
+        .map((x) => `<li>${_escapeHtml(x)}</li>`).join("");
+      resultEl.innerHTML = `
         <div class="export-stats">
           <div><dt>copied</dt><dd>${body.copied}</dd></div>
           <div><dt>skipped (existing)</dt><dd>${body.skipped_existing}</dd></div>
@@ -1441,7 +1471,7 @@ function _initExportModal() {
       `;
       goBtn.disabled = false;
     } catch (err) {
-      $("#export-modal-msg").textContent = err.message;
+      msgEl.textContent = err.message;
       goBtn.disabled = false;
     }
   });
@@ -1587,6 +1617,5 @@ refreshRuns();
 _initSearchInputs();
 _initBulkDelete();
 _initPresetEditor();
-_initExportModal();
 _initNotifications();
 _initMonitorRunWatcher();
