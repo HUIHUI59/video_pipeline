@@ -32,6 +32,11 @@ class ConfigPutBody(BaseModel):
     raw_yaml: str
 
 
+class ExportBatchBody(BaseModel):
+    dest_path: str
+    overwrite: bool = False
+
+
 class SaveBatchRequest(BaseModel):
     name: str
     movies: list[str] = []
@@ -368,6 +373,140 @@ def create_app(
         b.status = "ready"
         store.save_batch(b, overwrite=True)
         return b.model_dump()
+
+    @app.post("/api/batches/{name}/export")
+    def export_batch(name: str, body: ExportBatchBody) -> dict:
+        """Copy all clips matched by this batch's filter to dest_path,
+        organized by movie. Also writes a manifest subset + batch.json
+        + README.md so the recipient has everything they need.
+        """
+        b = store.get_batch(name)
+        if b is None:
+            raise _err("batch_not_found", f"batch {name!r} not found",
+                       status=404)
+        out = _current_output_root()
+        if out is None:
+            raise _err("no_output_root",
+                       "no output_root configured", status=400)
+
+        # Validate destination path: absolute, not a system root.
+        dest = Path(body.dest_path).expanduser()
+        if not dest.is_absolute():
+            raise _err("invalid_dest",
+                       "dest_path must be absolute", status=400)
+        try:
+            dest_resolved = dest.resolve()
+        except Exception as ex:
+            raise _err("invalid_dest", f"path resolve failed: {ex}",
+                       status=400)
+        forbidden_roots = {
+            "/", "/etc", "/bin", "/sbin", "/usr", "/var", "/boot",
+            "/lib", "/lib64", "/proc", "/sys", "/dev", "/root", "/home",
+        }
+        if str(dest_resolved) in forbidden_roots:
+            raise _err("invalid_dest",
+                       f"dest_path may not be a system root: {dest_resolved}",
+                       status=400)
+        # Block writing into the source output_root itself.
+        try:
+            if dest_resolved == out.resolve() or out.resolve() in dest_resolved.parents:
+                raise _err("invalid_dest",
+                           "dest_path may not equal or be inside output_root",
+                           status=400)
+        except FileNotFoundError:
+            pass
+
+        # Filter shots using the batch's saved filter_params + movies.
+        from src.runpod.upload import _iter_manifest_lines, _filter_entries
+        manifest_dir = out / "manifest"
+        if not manifest_dir.is_dir():
+            raise _err("manifest_missing",
+                       f"no manifest dir at {manifest_dir}", status=400)
+        all_entries = list(_iter_manifest_lines(
+            str(manifest_dir), movies_filter=set(b.movies)
+        ))
+        fp = b.filter_params
+        selected = _filter_entries(
+            all_entries,
+            categories=fp.categories,
+            max_shots=fp.max_shots,
+            skip_bad_quality=fp.skip_bad_quality,
+            skip_landscape=fp.skip_landscape,
+            min_duration_sec=fp.min_duration_sec,
+            max_duration_sec=fp.max_duration_sec,
+        )
+
+        # Prepare destination layout.
+        dest_resolved.mkdir(parents=True, exist_ok=True)
+        clips_root = dest_resolved / "clips"
+        manifest_out_dir = dest_resolved / "manifest"
+        clips_root.mkdir(exist_ok=True)
+        manifest_out_dir.mkdir(exist_ok=True)
+
+        import shutil
+        from collections import defaultdict
+        per_movie: dict[str, list] = defaultdict(list)
+        for movie, entry in selected:
+            per_movie[movie].append(entry)
+
+        copied = 0
+        skipped_existing = 0
+        missing_source = 0
+        errors: list[str] = []
+
+        for movie, entries in per_movie.items():
+            mdir = clips_root / movie
+            mdir.mkdir(exist_ok=True)
+            # Manifest subset for this movie.
+            mf_path = manifest_out_dir / f"{movie}.jsonl"
+            with mf_path.open("w", encoding="utf-8") as mf:
+                for e in entries:
+                    mf.write(e.model_dump_json() + "\n")
+            # Copy each clip.
+            for e in entries:
+                src_clip = (out / e.path).resolve() if not Path(e.path).is_absolute() \
+                           else Path(e.path)
+                if not src_clip.is_file():
+                    missing_source += 1
+                    errors.append(f"missing source: {src_clip}")
+                    continue
+                dst_clip = mdir / src_clip.name
+                if dst_clip.is_file() and not body.overwrite:
+                    skipped_existing += 1
+                    continue
+                try:
+                    shutil.copy2(src_clip, dst_clip)
+                    copied += 1
+                except Exception as ex:
+                    errors.append(f"{src_clip.name}: {ex}")
+
+        # Drop a batch.json + README.md so the recipient has full context.
+        (dest_resolved / "batch.json").write_text(
+            b.model_dump_json(indent=2), encoding="utf-8"
+        )
+        readme = (
+            f"# Exported batch: {b.name}\n\n"
+            f"Movies: {', '.join(b.movies)}\n\n"
+            f"Filter:\n```json\n{fp.model_dump_json(indent=2)}\n```\n\n"
+            f"Layout:\n"
+            f"- `batch.json` — full batch definition\n"
+            f"- `manifest/<movie>.jsonl` — only the shots in this batch\n"
+            f"- `clips/<movie>/*.mp4` — the actual video clips\n\n"
+            f"Stats: copied={copied} skipped_existing={skipped_existing}"
+            f" missing_source={missing_source}\n"
+        )
+        (dest_resolved / "README.md").write_text(readme, encoding="utf-8")
+
+        return {
+            "ok": True,
+            "dest": str(dest_resolved),
+            "movies": list(per_movie.keys()),
+            "selected": len(selected),
+            "copied": copied,
+            "skipped_existing": skipped_existing,
+            "missing_source": missing_source,
+            "errors": errors[:20],   # cap to avoid huge response
+        }
 
     # ── M4 Pods ---------------------------------------------------------
 

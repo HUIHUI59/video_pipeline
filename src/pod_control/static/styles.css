@@ -7,6 +7,7 @@
   --bg-lift: #11141b;
   --panel: #161a22;
   --panel-lift: #1c212b;
+  --surface: #11141b;            /* alias for --bg-lift; used by inputs/modals */
   --border: #242936;
   --border-strong: #323848;
   --text: #e6ebf3;
@@ -1126,16 +1127,21 @@ body.modal-open { overflow: hidden; }
 }
 .modal-overlay[hidden] { display: none; }
 .modal-panel {
-  background: var(--bg);
+  background: var(--panel);
   border: 1px solid var(--border-strong);
   border-radius: 10px;
-  padding: 18px;
-  width: min(900px, 92vw);
-  max-height: 86vh;
+  padding: 20px;
+  width: min(960px, 94vw);
+  height: min(720px, 88vh);     /* explicit height so flex:1 textarea fills it */
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
   box-shadow: 0 16px 48px rgba(0,0,0,.6);
+}
+.modal-panel-narrow {
+  width: min(560px, 92vw);
+  height: auto;                  /* narrow modals size to content */
+  max-height: 86vh;
 }
 .modal-header {
   display: flex;
@@ -1154,17 +1160,21 @@ body.modal-open { overflow: hidden; }
 }
 .modal-header .inline-btn:hover { color: var(--text); }
 .modal-panel textarea {
-  flex: 1;
-  min-height: 380px;
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;                 /* allow flex item to actually shrink properly */
   font-family: ui-monospace, "SF Mono", Consolas, monospace;
-  font-size: 12px;
-  line-height: 1.5;
-  background: var(--surface);
+  font-size: 13px;
+  line-height: 1.55;
+  background: var(--bg-lift);
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 12px;
-  resize: vertical;
+  padding: 14px;
+  resize: none;                  /* height is driven by modal-panel; no manual resize */
+  white-space: pre;
+  overflow: auto;
+  tab-size: 2;
 }
 .modal-panel textarea:focus {
   outline: none;
@@ -1177,3 +1187,63 @@ body.modal-open { overflow: hidden; }
   justify-content: flex-end;
 }
 .modal-footer .muted { margin-right: auto; }
+
+/* ── Batch export modal ──────────────────────────────────── */
+
+.modal-panel-narrow textarea { min-height: 0; }
+.batch-export-btn {
+  color: var(--muted);
+}
+.batch-export-btn:hover {
+  color: #7cb4f7;
+  background: rgba(124, 180, 247, .12);
+}
+.check-row-inline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.check-row-inline input { margin: 0; }
+
+.export-result:empty { display: none; }
+.export-result {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 12px;
+}
+.export-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 6px 12px;
+  margin-bottom: 6px;
+}
+.export-stats > div { display: flex; gap: 6px; }
+.export-stats dt {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.export-stats dd {
+  margin: 0;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.export-dest {
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  font-size: 11px;
+  margin-top: 6px;
+  word-break: break-all;
+}
+.export-result details {
+  margin-top: 6px;
+  font-size: 11px;
+}
+.export-result details ul {
+  margin: 4px 0 0 16px;
+  padding: 0;
+}

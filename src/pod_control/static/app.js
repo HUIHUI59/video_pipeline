@@ -242,6 +242,15 @@ async function loadBatches() {
         if (e.target.closest(".delete-btn")) return;
         loadBatchIntoFilter(b);
       });
+      const exportBtn = document.createElement("button");
+      exportBtn.className = "delete-btn batch-export-btn";
+      exportBtn.textContent = "export";
+      exportBtn.title = "export clips to a folder";
+      exportBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openExportModal(b);
+      });
+      li.appendChild(exportBtn);
       const del = document.createElement("button");
       del.className = "delete-btn";
       del.textContent = "delete";
@@ -1257,6 +1266,86 @@ function _initYamlModal() {
   });
 }
 
+// ── Batch export modal ──────────────────────────────────────────────
+
+function openExportModal(batch) {
+  const modal = $("#export-modal");
+  if (!modal) return;
+  $("#export-modal-title").textContent = `Export batch: ${batch.name}`;
+  $("#export-modal-desc").textContent =
+    `${batch.movies.length} movie(s) · ${batch.shot_count} shot(s) total`;
+  $("#export-modal-path").value = "";
+  $("#export-modal-overwrite").checked = false;
+  $("#export-modal-msg").textContent = "";
+  $("#export-modal-result").innerHTML = "";
+  $("#export-modal-go").disabled = false;
+  modal.dataset.batch = batch.name;
+  modal.hidden = false;
+  document.body.classList.add("modal-open");
+  $("#export-modal-path").focus();
+}
+
+function _initExportModal() {
+  const modal = $("#export-modal");
+  if (!modal) return;
+  function close() {
+    modal.hidden = true;
+    document.body.classList.remove("modal-open");
+  }
+  $("#export-modal-close").addEventListener("click", close);
+  $("#export-modal-cancel").addEventListener("click", close);
+  modal.addEventListener("click", (e) => { if (e.target === modal) close(); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !modal.hidden) close();
+  });
+  $("#export-modal-go").addEventListener("click", async () => {
+    const name = modal.dataset.batch;
+    const dest = $("#export-modal-path").value.trim();
+    const overwrite = $("#export-modal-overwrite").checked;
+    if (!dest) {
+      $("#export-modal-msg").textContent = "destination path required";
+      return;
+    }
+    const goBtn = $("#export-modal-go");
+    goBtn.disabled = true;
+    $("#export-modal-msg").textContent = "exporting… (may take a while)";
+    $("#export-modal-result").innerHTML = "";
+    try {
+      const r = await fetch(
+        `/api/batches/${encodeURIComponent(name)}/export`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ dest_path: dest, overwrite }),
+        }
+      );
+      const body = await r.json();
+      if (!r.ok) {
+        $("#export-modal-msg").textContent =
+          body?.detail?.error?.message || `HTTP ${r.status}`;
+        goBtn.disabled = false;
+        return;
+      }
+      $("#export-modal-msg").textContent = "done";
+      const errs = (body.errors || []).slice(0, 5)
+        .map((e) => `<li>${_escapeHtml(e)}</li>`).join("");
+      $("#export-modal-result").innerHTML = `
+        <div class="export-stats">
+          <div><dt>copied</dt><dd>${body.copied}</dd></div>
+          <div><dt>skipped (existing)</dt><dd>${body.skipped_existing}</dd></div>
+          <div><dt>missing source</dt><dd>${body.missing_source}</dd></div>
+          <div><dt>movies</dt><dd>${body.movies.length}</dd></div>
+        </div>
+        <div class="muted export-dest">→ ${_escapeHtml(body.dest)}</div>
+        ${errs ? `<details><summary class="muted">${body.errors.length} error(s)</summary><ul>${errs}</ul></details>` : ""}
+      `;
+      goBtn.disabled = false;
+    } catch (err) {
+      $("#export-modal-msg").textContent = err.message;
+      goBtn.disabled = false;
+    }
+  });
+}
+
 // ── Search filters (batch list + history) ───────────────────────────
 
 function _initSearchInputs() {
@@ -1397,5 +1486,6 @@ refreshRuns();
 _initSearchInputs();
 _initBulkDelete();
 _initYamlModal();
+_initExportModal();
 _initNotifications();
 _initMonitorRunWatcher();
