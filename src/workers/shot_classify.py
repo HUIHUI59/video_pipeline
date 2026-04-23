@@ -810,6 +810,32 @@ def classify_one(src: str, manifest_dir: str,
     return res
 
 # ══════════════════════════════════════════════════════════════
+# Multi-process subprocess entry (picklable, no queue reference)
+# ══════════════════════════════════════════════════════════════
+
+def _classify_in_subprocess(args):
+    """ProcessPoolExecutor entry: re-init detectors per process, run
+    classify_one with queue=None, return ClassifyResult.
+
+    The main process owns the queue (claim/mark_done/mark_failed) so
+    nothing related to TaskQueue crosses the process boundary.
+
+    Bit-equivalent to single-process classify_one: same models, same
+    weights, same conf, same algorithms, same sample_fracs.
+    """
+    (src, manifest_dir, model_path, face_model_path, person_conf,
+     face_conf, single_ratio, wide_ratio, sample_fracs,
+     quality_thresholds, skip_motion_detect) = args
+    return classify_one(
+        src, manifest_dir, model_path, face_model_path,
+        person_conf, face_conf, single_ratio, wide_ratio,
+        sample_fracs, queue=None,
+        quality_thresholds=quality_thresholds,
+        skip_motion_detect=skip_motion_detect,
+    )
+
+
+# ══════════════════════════════════════════════════════════════
 # 扫描
 # ══════════════════════════════════════════════════════════════
 
@@ -833,7 +859,8 @@ def run_queue(queue, manifest_dir: str, workers: int,
               single_ratio: float, wide_ratio: float,
               sample_fracs: tuple, stop_ev,
               quality_thresholds: Optional[dict[str, float]] = None,
-              skip_motion_detect: bool = False):
+              skip_motion_detect: bool = False,
+              executor_kind: str = "thread"):
     counts  = {"ok": 0, "err": 0, "landscape": 0, "single": 0,
                "dominant": 0, "multi": 0, "wide": 0}
     current = {}
@@ -862,7 +889,26 @@ def run_queue(queue, manifest_dir: str, workers: int,
                             total=total_now, extra="")
         prog.update(pid, completed=stats.get("done", 0))
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        # Pick executor: 'thread' (default, legacy) vs 'process' (true
+        # parallelism via multiprocessing — needed when GIL + 9p IO
+        # serialize threads). In process mode each child has its own
+        # YOLO + mediapipe instance and its own GIL; main process owns
+        # the queue (mark_done / mark_failed).
+        if executor_kind == "process":
+            import multiprocessing as _mp
+            ctx = _mp.get_context("spawn")
+            log.info(f"Executor: ProcessPoolExecutor(max_workers={workers}, "
+                     f"mp_context=spawn)")
+            pool_cls = lambda: concurrent.futures.ProcessPoolExecutor(
+                max_workers=workers, mp_context=ctx,
+            )
+        else:
+            log.info(f"Executor: ThreadPoolExecutor(max_workers={workers})")
+            pool_cls = lambda: concurrent.futures.ThreadPoolExecutor(
+                max_workers=workers,
+            )
+
+        with pool_cls() as pool:
             pending_futs: dict[concurrent.futures.Future, str] = {}
 
             def submit_next():
@@ -875,13 +921,21 @@ def run_queue(queue, manifest_dir: str, workers: int,
                 if item is None: return False
                 src, _, _idx = item
                 try:
-                    fut = pool.submit(classify_one, src, manifest_dir,
-                                      model_path, face_model_path,
-                                      person_conf, face_conf,
-                                      single_ratio, wide_ratio,
-                                      sample_fracs, queue,
-                                      quality_thresholds,
-                                      skip_motion_detect)
+                    if executor_kind == "process":
+                        # Pass picklable tuple; queue lives in main proc only.
+                        args = (src, manifest_dir, model_path,
+                                face_model_path, person_conf, face_conf,
+                                single_ratio, wide_ratio, sample_fracs,
+                                quality_thresholds, skip_motion_detect)
+                        fut = pool.submit(_classify_in_subprocess, args)
+                    else:
+                        fut = pool.submit(classify_one, src, manifest_dir,
+                                          model_path, face_model_path,
+                                          person_conf, face_conf,
+                                          single_ratio, wide_ratio,
+                                          sample_fracs, queue,
+                                          quality_thresholds,
+                                          skip_motion_detect)
                 except Exception as e:
                     log.error(f"submit 异常 ({e})，释放 claim 后重试")
                     try: queue.mark_failed(src, f"submit error: {e}")
@@ -909,6 +963,21 @@ def run_queue(queue, manifest_dir: str, workers: int,
                                 try: queue.mark_failed(src, str(e))
                                 except Exception as ee:
                                     log.warning(f"mark_failed 异常 ({ee})")
+                            # In process mode the child didn't touch queue
+                            # (it ran with queue=None); main proc records
+                            # done/failed here.
+                            if executor_kind == "process":
+                                if res.success:
+                                    movie_stem = Path(src).parent.name
+                                    mp_path = str(Path(manifest_dir) /
+                                                  f"{movie_stem}.jsonl")
+                                    try: queue.mark_done(src, mp_path)
+                                    except Exception as ee:
+                                        log.warning(f"mark_done 异常 ({ee})")
+                                else:
+                                    try: queue.mark_failed(src, res.error)
+                                    except Exception as ee:
+                                        log.warning(f"mark_failed 异常 ({ee})")
                             if res.success:
                                 counts["ok"] += 1
                                 counts[res.category] = counts.get(res.category, 0) + 1
@@ -990,6 +1059,11 @@ def main():
                              f"默认 {QUALITY_MAX_CAMERA_MOTION}")
     parser.add_argument("--skip-motion-detect", action="store_true",
                         help="跳过光流抖动检测（省时间，但 manifest 没 camera_motion）")
+    parser.add_argument("--exec-mode", type=str, default="thread",
+                        choices=["thread", "process"],
+                        help="并发执行模式: thread (默认, 兼容性) | process "
+                             "(true parallelism via multiprocessing — 9p IO + "
+                             "GIL 时显著加速). 精度跟 thread 模式 bit-equivalent.")
     args = parser.parse_args()
 
     # ── 解析画质阈值：优先级 CLI flag > YAML > --quality-mode > 模块默认（= spec）
@@ -1087,7 +1161,8 @@ def main():
                           args.single_face_ratio, args.wide_face_ratio,
                           sample_fracs, stop_ev,
                           quality_thresholds=quality_thresholds,
-                          skip_motion_detect=args.skip_motion_detect)
+                          skip_motion_detect=args.skip_motion_detect,
+                          executor_kind=args.exec_mode)
             console.rule("[bold]分类完成[/bold]")
             console.print(
                 f"  ✅ ok={c['ok']}  ❌ err={c['err']}  |  "

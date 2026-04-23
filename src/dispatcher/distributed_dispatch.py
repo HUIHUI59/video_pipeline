@@ -404,7 +404,7 @@ def build_cmd_stage3(server:Server, python:str, clips_dir:str, clean_dir:str,
 
 def build_cmd_stage4(server:Server, python:str, clips_dir:str, output_dir:str,
                      queue_dir:str, pid_file:str, workers:int, log_path:str,
-                     face_conf:float=0.35) -> str:
+                     face_conf:float=0.35, exec_mode:str="thread") -> str:
     script = str(Path(server.remote_script).parent / "shot_classify.py")
     sdir   = str(Path(server.remote_script).parent)
     return (f"PYTHONPATH={sdir}:$PYTHONPATH "
@@ -412,6 +412,7 @@ def build_cmd_stage4(server:Server, python:str, clips_dir:str, output_dir:str,
             f"{clips_dir} {output_dir} "
             f"--workers {workers} "
             f"--face-conf {face_conf} "
+            f"--exec-mode {exec_mode} "
             f"--log-file {log_path} "
             f"--queue-dir {queue_dir} "
             f"--worker-id {server.name} "
@@ -608,7 +609,8 @@ def _run_stage(stage:str, op_servers:list, py_paths:dict, args,
         elif stage == "4":
             cmd = build_cmd_stage4(sv, py_paths[sv.name], clips_dir,
                                    output_dir, queue_dir, pid_file, workers_n, log_path,
-                                   face_conf=getattr(args,"face_conf",0.35))
+                                   face_conf=getattr(args,"face_conf",0.35),
+                                   exec_mode=getattr(args,"exec_mode","thread"))
         else:
             vsr = getattr(args,"vsr_dir","") or sv.vsr_dir or "~/video-subtitle-remover"
             cmd = build_cmd_stage3(sv, py_paths[sv.name], clips_dir,
@@ -713,6 +715,11 @@ def main():
                         help="Stage 3：video-subtitle-remover 路径，覆盖 servers.yaml 里的 vsr_dir")
     parser.add_argument("--face-conf",   type=float, default=0.35,
                         help="Stage 4：YOLO 检测置信度阈值（默认 0.35）")
+    parser.add_argument("--exec-mode",   type=str, default="thread",
+                        choices=["thread", "process"],
+                        help="Stage 4 worker 并发模式: thread (默认) | "
+                             "process (multiprocessing, 9p IO + GIL 时显著加速). "
+                             "精度跟 thread 模式 bit-equivalent.")
     args = parser.parse_args()
 
     servers = load_servers(args.servers)
