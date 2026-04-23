@@ -1247,3 +1247,126 @@ body.modal-open { overflow: hidden; }
   margin: 4px 0 0 16px;
   padding: 0;
 }
+
+/* ── Inline preset editor (NOT a modal) ──────────────────── */
+
+.preset-editor {
+  margin-top: 14px;
+  padding: 16px;
+  background: var(--bg-lift);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+}
+
+.preset-editor-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+.preset-editor-header strong {
+  font-size: 13px;
+  color: var(--text);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.preset-editor-spacer { flex: 1; }
+.preset-editor-header .btn-primary,
+.preset-editor-header .btn-secondary {
+  padding: 5px 14px;
+  font-size: 12px;
+  height: 30px;
+}
+
+.preset-editor-form {
+  max-height: 60vh;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+/* Sections (top-level dict entries) — collapsible */
+.config-section {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+.config-section > summary {
+  padding: 8px 14px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-soft);
+  background: var(--panel-lift);
+  list-style: none;        /* hide default ▶ marker */
+  user-select: none;
+  position: relative;
+}
+.config-section > summary::before {
+  content: "▸ ";
+  margin-right: 4px;
+  display: inline-block;
+  transition: transform 120ms;
+  font-size: 10px;
+}
+.config-section[open] > summary::before { content: "▾ "; }
+.config-section > summary:hover { color: var(--text); }
+
+.config-section-body {
+  padding: 10px 14px;
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  gap: 6px 12px;
+  align-items: center;
+}
+
+/* Nested section inside body — span both columns */
+.config-section-body > .config-section {
+  grid-column: 1 / -1;
+  margin: 4px 0;
+}
+
+/* Each leaf field row */
+.config-field {
+  display: contents;       /* children participate in parent grid */
+}
+.config-field > label {
+  font-size: 12px;
+  color: var(--muted);
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.config-field > input[type="text"],
+.config-field > input[type="number"] {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 5px 9px;
+  border-radius: 5px;
+  font-size: 12px;
+  font-family: inherit;
+  width: 100%;
+  box-sizing: border-box;
+}
+.config-field > input[type="checkbox"] {
+  justify-self: start;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+.config-field > input:focus {
+  border-color: var(--accent);
+  background: var(--panel-lift);
+  outline: none;
+}
+
+@media (max-width: 700px) {
+  .config-section-body { grid-template-columns: 1fr; }
+}

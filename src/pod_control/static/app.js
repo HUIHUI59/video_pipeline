@@ -1195,74 +1195,175 @@ function _onPresetChange() {
   $("#run-preset-meta").textContent = parts.join(" · ");
 }
 
-function _initYamlModal() {
+// ── Inline preset editor (recursive form, NOT a modal) ────────────
+
+const _PRESET_TYPE_LIST = "list_csv";    // sentinel for list-of-strings inputs
+
+/** Build form rows recursively from a parsed yaml dict. Each leaf becomes
+ *  an input whose data-path/data-type drives _collectConfigForm later. */
+function _renderConfigSection(parent, key, value, path, depth) {
+  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+    // Nested mapping → collapsible <details>
+    const det = document.createElement("details");
+    det.className = "config-section";
+    det.open = depth < 1;
+    const sum = document.createElement("summary");
+    sum.textContent = key;
+    det.appendChild(sum);
+    const body = document.createElement("div");
+    body.className = "config-section-body";
+    for (const [childKey, childVal] of Object.entries(value)) {
+      _renderConfigSection(body, childKey, childVal,
+                           path.concat([childKey]), depth + 1);
+    }
+    det.appendChild(body);
+    parent.appendChild(det);
+    return;
+  }
+  // Leaf field (or array → comma-separated)
+  const row = document.createElement("div");
+  row.className = "config-field";
+  const lbl = document.createElement("label");
+  lbl.textContent = key;
+  lbl.title = path.join(".");
+  row.appendChild(lbl);
+
+  let input;
+  let inputType = typeof value;
+  if (Array.isArray(value)) {
+    input = document.createElement("input");
+    input.type = "text";
+    input.value = value.join(", ");
+    input.placeholder = "comma-separated";
+    inputType = _PRESET_TYPE_LIST;
+  } else if (typeof value === "boolean") {
+    input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = value;
+  } else if (typeof value === "number") {
+    input = document.createElement("input");
+    input.type = "number";
+    input.step = Number.isInteger(value) ? "1" : "any";
+    input.value = String(value);
+  } else {
+    // string OR null
+    input = document.createElement("input");
+    input.type = "text";
+    input.value = value === null ? "" : String(value);
+    if (value === null) input.placeholder = "(null)";
+  }
+  input.dataset.path = path.join(".");
+  input.dataset.type = inputType;
+  input.dataset.wasNull = value === null ? "1" : "0";
+  row.appendChild(input);
+  parent.appendChild(row);
+}
+
+function _renderConfigForm(rootEl, parsed) {
+  rootEl.innerHTML = "";
+  for (const [k, v] of Object.entries(parsed)) {
+    _renderConfigSection(rootEl, k, v, [k], 0);
+  }
+}
+
+/** Walk the rendered form, rebuild a parsed dict that mirrors original. */
+function _collectConfigForm(rootEl) {
+  const out = {};
+  rootEl.querySelectorAll("input[data-path]").forEach((inp) => {
+    const path = inp.dataset.path.split(".");
+    let v;
+    if (inp.dataset.type === _PRESET_TYPE_LIST) {
+      v = inp.value.split(",").map((s) => s.trim()).filter(Boolean);
+    } else if (inp.dataset.type === "boolean") {
+      v = inp.checked;
+    } else if (inp.dataset.type === "number") {
+      const raw = inp.value.trim();
+      v = raw === "" ? null : Number(raw);
+      if (Number.isFinite(v) && Number.isInteger(v) && !raw.includes(".")) {
+        v = parseInt(raw, 10);
+      }
+    } else {
+      // string or originally null
+      v = inp.value;
+      if (v === "" && inp.dataset.wasNull === "1") v = null;
+    }
+    // Insert into nested out by path
+    let cursor = out;
+    for (let i = 0; i < path.length - 1; i++) {
+      const key = path[i];
+      if (!(key in cursor) || typeof cursor[key] !== "object") cursor[key] = {};
+      cursor = cursor[key];
+    }
+    cursor[path[path.length - 1]] = v;
+  });
+  return out;
+}
+
+function _initPresetEditor() {
   const sel = $("#run-preset-sel");
   if (sel) sel.addEventListener("change", _onPresetChange);
 
   const editBtn = $("#run-preset-edit-btn");
-  const modal = $("#yaml-modal");
-  const ta = $("#yaml-modal-text");
-  const msg = $("#yaml-modal-msg");
-  const title = $("#yaml-modal-title");
+  const editor = $("#preset-editor");
+  const formEl = $("#preset-editor-form");
+  const msg = $("#preset-editor-msg");
+  const title = $("#preset-editor-title");
+  if (!editBtn || !editor) return;
 
-  if (!editBtn || !modal) return;
+  let currentName = null;
 
-  function open() {
-    modal.hidden = false;
-    document.body.classList.add("modal-open");
-    document.addEventListener("keydown", _escClose);
+  function open(name, parsed) {
+    currentName = name;
+    title.textContent = `Editing: ${name}`;
+    msg.textContent = "";
+    _renderConfigForm(formEl, parsed);
+    editor.hidden = false;
+    editor.scrollIntoView({ behavior: "smooth", block: "start" });
   }
   function close() {
-    modal.hidden = true;
-    document.body.classList.remove("modal-open");
-    msg.textContent = "";
-    document.removeEventListener("keydown", _escClose);
+    editor.hidden = true;
+    formEl.innerHTML = "";
+    currentName = null;
   }
-  function _escClose(e) { if (e.key === "Escape") close(); }
 
   editBtn.addEventListener("click", async () => {
     const name = $("#run-preset-sel").value;
     if (!name) { alert("no preset selected"); return; }
-    title.textContent = `Edit ${name}`;
-    ta.value = "loading…";
-    msg.textContent = "";
-    open();
+    msg.textContent = "loading…";
+    title.textContent = `Loading ${name}…`;
+    editor.hidden = false;
+    formEl.innerHTML = "";
     try {
       const data = await jsonOrThrow(
         await fetch(`/api/configs/${encodeURIComponent(name)}`)
       );
-      ta.value = data.raw_yaml;
-      ta.dataset.name = name;
+      open(name, data.parsed || {});
     } catch (err) {
-      ta.value = "";
       msg.textContent = err.message;
     }
   });
-  $("#yaml-modal-close").addEventListener("click", close);
-  $("#yaml-modal-cancel").addEventListener("click", close);
-  $("#yaml-modal-save").addEventListener("click", async () => {
-    const name = ta.dataset.name;
+
+  $("#preset-editor-cancel").addEventListener("click", close);
+
+  $("#preset-editor-save").addEventListener("click", async () => {
+    if (!currentName) return;
     msg.textContent = "saving…";
+    const parsed = _collectConfigForm(formEl);
     try {
-      const r = await fetch(`/api/configs/${encodeURIComponent(name)}`, {
+      const r = await fetch(`/api/configs/${encodeURIComponent(currentName)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ raw_yaml: ta.value }),
+        body: JSON.stringify({ parsed }),
       });
       const data = await jsonOrThrow(r);
       msg.textContent = `saved · model=${data.meta?.model ?? "?"}`;
       await loadPresets();
-      // restore selection
       const s = $("#run-preset-sel");
-      if ([...s.options].some((o) => o.value === name)) s.value = name;
+      if ([...s.options].some((o) => o.value === currentName)) s.value = currentName;
       _onPresetChange();
-      setTimeout(close, 600);
     } catch (err) {
       msg.textContent = err.message;
     }
-  });
-  modal.addEventListener("click", (e) => {
-    if (e.target === modal) close();
   });
 }
 
@@ -1485,7 +1586,7 @@ loadPresets();
 refreshRuns();
 _initSearchInputs();
 _initBulkDelete();
-_initYamlModal();
+_initPresetEditor();
 _initExportModal();
 _initNotifications();
 _initMonitorRunWatcher();

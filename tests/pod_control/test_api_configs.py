@@ -107,3 +107,34 @@ def test_put_config_rejects_example_suffix(client):
                    json={"raw_yaml": "pod: {}\npaths: {}\nmodel: {}\n"})
     assert r.status_code == 400
     assert r.json()["detail"]["error"]["code"] == "invalid_name"
+
+
+def test_put_config_accepts_parsed_dict(client):
+    name = f"{_TMP_PREFIX}parsed.yaml"
+    body = {"parsed": {
+        "pod": {"host": "x", "port": 22, "user": "root", "ssh_key": "~/k"},
+        "paths": {"pod_workspace": "/workspace/x"},
+        "model": {"name": "test/parsed", "max_model_len": 8192},
+    }}
+    r = client.put(f"/api/configs/{name}", json=body)
+    assert r.status_code == 200, r.text
+    written = _REPO_CFG / name
+    assert written.is_file()
+    parsed = yaml.safe_load(written.read_text())
+    assert parsed["model"]["name"] == "test/parsed"
+    assert parsed["model"]["max_model_len"] == 8192
+
+
+def test_put_config_parsed_missing_section_rejected(client):
+    name = f"{_TMP_PREFIX}badparsed.yaml"
+    body = {"parsed": {"pod": {}, "paths": {}}}  # missing 'model'
+    r = client.put(f"/api/configs/{name}", json=body)
+    assert r.status_code == 400
+    assert r.json()["detail"]["error"]["code"] == "yaml_invalid"
+
+
+def test_put_config_empty_body_rejected(client):
+    name = f"{_TMP_PREFIX}empty.yaml"
+    r = client.put(f"/api/configs/{name}", json={})
+    assert r.status_code == 400
+    assert r.json()["detail"]["error"]["code"] == "yaml_invalid"

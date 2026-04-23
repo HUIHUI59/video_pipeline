@@ -29,7 +29,8 @@ _CLIP_CHUNK = 1 << 20  # 1 MiB
 
 
 class ConfigPutBody(BaseModel):
-    raw_yaml: str
+    raw_yaml: str | None = None
+    parsed: dict | None = None      # alternative: structured form sends dict
 
 
 class ExportBatchBody(BaseModel):
@@ -861,14 +862,31 @@ def create_app(
 
     @app.put("/api/configs/{name}")
     def put_config(name: str, body: ConfigPutBody) -> dict:
+        """Accept either raw_yaml (power users) or parsed dict (form UI).
+        If both are provided, parsed wins."""
         _safe_config_name(name)
-        try:
-            parsed = yaml.safe_load(body.raw_yaml)
-        except yaml.YAMLError as ex:
-            raise _err("yaml_invalid", f"YAML parse error: {ex}", status=400)
-        if not isinstance(parsed, dict):
+        if body.parsed is not None:
+            parsed = body.parsed
+            if not isinstance(parsed, dict):
+                raise _err("yaml_invalid",
+                           "parsed body must be a mapping", status=400)
+            raw_to_write = yaml.safe_dump(
+                parsed, sort_keys=False, allow_unicode=True, default_flow_style=False,
+            )
+        elif body.raw_yaml is not None:
+            try:
+                parsed = yaml.safe_load(body.raw_yaml)
+            except yaml.YAMLError as ex:
+                raise _err("yaml_invalid", f"YAML parse error: {ex}",
+                           status=400)
+            if not isinstance(parsed, dict):
+                raise _err("yaml_invalid",
+                           "top-level must be a mapping", status=400)
+            raw_to_write = body.raw_yaml
+        else:
             raise _err("yaml_invalid",
-                       "top-level must be a mapping", status=400)
+                       "request body must include raw_yaml or parsed",
+                       status=400)
         for required in ("pod", "paths", "model"):
             if required not in parsed:
                 raise _err("yaml_invalid",
@@ -876,7 +894,7 @@ def create_app(
                            status=400)
         p = _CONFIGS_DIR / name
         from .store import _atomic_write_text
-        _atomic_write_text(p, body.raw_yaml)
+        _atomic_write_text(p, raw_to_write)
         return {"ok": True, "name": name, "meta": _config_meta(p)}
 
     @app.get("/api/runs/{run_id}/local-tail")
