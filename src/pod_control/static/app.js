@@ -377,7 +377,12 @@ function renderPreview(result) {
     grid.appendChild(card);
   }
   $("#match-count").textContent = `${result.total} matched`;
-  $("#page-info").textContent = `page ${result.page}`;
+  const totalPages = result.page_size > 0
+    ? Math.max(1, Math.ceil(result.total / result.page_size))
+    : 1;
+  $("#page-info").textContent = result.sampled
+    ? `random sample · ${result.shots.length} of ${result.total}`
+    : `page ${result.page} / ${totalPages} · ${result.total} total`;
   $("#page-prev").disabled = result.page <= 1 || result.sampled;
   $("#page-next").disabled =
     result.sampled || result.page * result.page_size >= result.total;

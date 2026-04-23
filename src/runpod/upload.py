@@ -76,33 +76,68 @@ def _ssh_opts(pod: dict[str, Any]) -> list[str]:
             "-o", "ConnectTimeout=10"]
 
 
+import threading as _threading
+
+# (path, mtime) → list[ManifestEntry]. Re-parses only when mtime changes.
+# Heavy hitter for pod_control's preview/filter API (called on every page
+# turn). Without it, each request re-validates ~50 files × thousands of
+# rows + Pydantic, dominating response time.
+_MANIFEST_CACHE: dict[Path, tuple[float, list[ManifestEntry]]] = {}
+_MANIFEST_CACHE_LOCK = _threading.Lock()
+
+
+def _load_manifest_cached(path: Path) -> list[ManifestEntry]:
+    """Return validated entries for one .jsonl, using mtime cache.
+
+    Bad lines are logged ONCE per (file, mtime) — not once per call —
+    so repeat reads (preview + paging) don't spam the same warnings.
+    """
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return []
+    with _MANIFEST_CACHE_LOCK:
+        cached = _MANIFEST_CACHE.get(path)
+        if cached is not None and cached[0] == mtime:
+            return cached[1]
+    entries: list[ManifestEntry] = []
+    bad_count = 0
+    bad_examples: list[str] = []
+    with open(path, encoding="utf-8") as f:
+        for ln_no, line in enumerate(f, 1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entries.append(ManifestEntry.model_validate(json.loads(line)))
+            except Exception as e:
+                bad_count += 1
+                if len(bad_examples) < 3:
+                    bad_examples.append(f"L{ln_no}: {e}")
+    if bad_count:
+        log.warning(
+            f"{path.name}: skipped {bad_count} bad line(s); "
+            f"first {len(bad_examples)}: {' | '.join(bad_examples)}"
+        )
+    with _MANIFEST_CACHE_LOCK:
+        _MANIFEST_CACHE[path] = (mtime, entries)
+    return entries
+
+
 def _iter_manifest_lines(manifest_dir: str,
                          movies_filter: set[str] | None
                          ) -> Iterable[tuple[str, ManifestEntry]]:
     """Yield (movie_name, ManifestEntry) pairs from Stage 4 *.jsonl files.
 
-    Scope: validates INPUT manifests only (shot_id, clip path, stage-4
-    metadata). Does NOT validate delivery_v1 ShotLabel — those are
-    pod-side outputs. The full ShotLabel validation pipeline runs on the
-    pod (pod_runner.parse_and_validate: post_normalize.fix_all →
-    ShotLabel.model_validate → spec ShotValidator.validate) and is
-    re-checked locally by download.py._validate_all after rsync.
+    Backed by a per-file mtime cache (`_load_manifest_cached`) so repeat
+    invocations (e.g. pod_control preview pagination) skip re-parsing.
     """
     for p in sorted(Path(manifest_dir).glob("*.jsonl")):
         movie = p.stem
         if movies_filter and movie not in movies_filter:
             continue
-        with open(p, encoding="utf-8") as f:
-            for ln_no, line in enumerate(f, 1):
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    entry = ManifestEntry.model_validate(json.loads(line))
-                except Exception as e:
-                    log.warning(f"{p.name}:{ln_no} 校验失败，跳过 ({e})")
-                    continue
-                yield movie, entry
+        for entry in _load_manifest_cached(p):
+            yield movie, entry
 
 
 def _filter_entries(entries: list[tuple[str, ManifestEntry]],
