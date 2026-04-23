@@ -12,6 +12,8 @@ import time
 from pathlib import Path
 from typing import Iterator
 
+import yaml
+
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -24,6 +26,10 @@ from .store import Batch, FilterParams, PodProfile, Store, StoreError
 
 
 _CLIP_CHUNK = 1 << 20  # 1 MiB
+
+
+class ConfigPutBody(BaseModel):
+    raw_yaml: str
 
 
 class SaveBatchRequest(BaseModel):
@@ -637,6 +643,102 @@ def create_app(
         with store.state_lock() as state:
             state.history = []
         return {"ok": True}
+
+    @app.delete("/api/runs/{run_id}", status_code=204)
+    def delete_run(run_id: str) -> Response:
+        """Remove a single history entry. Active run is never touched."""
+        with store.state_lock() as state:
+            before = len(state.history)
+            state.history = [r for r in state.history if r.id != run_id]
+            if len(state.history) == before:
+                raise _err("run_not_found",
+                           f"run {run_id!r} not in history", status=404)
+        return Response(status_code=204)
+
+    # ── Config presets (configs/runpod*.yaml) -------------------------
+
+    _CONFIGS_DIR = Path(__file__).resolve().parent.parent.parent / "configs"
+
+    def _safe_config_name(name: str) -> str:
+        """Reject path-traversal and `.example`; require runpod*.yaml."""
+        if "/" in name or "\\" in name or ".." in name:
+            raise _err("invalid_name",
+                       "config name must be a bare filename", status=400)
+        if name.endswith(".example"):
+            raise _err("invalid_name",
+                       "cannot modify .example files", status=400)
+        if not (name.startswith("runpod") and name.endswith(".yaml")):
+            raise _err("invalid_name",
+                       "config must match runpod*.yaml", status=400)
+        return name
+
+    def _config_meta(p: Path) -> dict:
+        """Extract preset metadata for the dropdown."""
+        try:
+            cfg = yaml.safe_load(p.read_text("utf-8")) or {}
+        except Exception as ex:
+            return {
+                "name": p.name, "path": str(p),
+                "model": None, "max_model_len": None, "rounds": None,
+                "error": f"yaml parse: {ex}",
+            }
+        model = (cfg.get("model") or {}).get("name")
+        sampling = cfg.get("sampling") or {}
+        max_len = (sampling.get("max_model_len")
+                   or (cfg.get("model") or {}).get("max_model_len"))
+        rounds = ((cfg.get("pipeline") or {}).get("rounds")
+                  or cfg.get("rounds"))
+        return {
+            "name": p.name, "path": str(p),
+            "model": model, "max_model_len": max_len, "rounds": rounds,
+        }
+
+    @app.get("/api/configs")
+    def list_configs() -> dict:
+        if not _CONFIGS_DIR.is_dir():
+            return {"configs": []}
+        items = []
+        for p in sorted(_CONFIGS_DIR.glob("runpod*.yaml")):
+            if p.name.endswith(".example"):
+                continue
+            items.append(_config_meta(p))
+        return {"configs": items}
+
+    @app.get("/api/configs/{name}")
+    def get_config(name: str) -> dict:
+        _safe_config_name(name)
+        p = _CONFIGS_DIR / name
+        if not p.is_file():
+            raise _err("config_not_found", f"no config {name!r}", status=404)
+        raw = p.read_text("utf-8")
+        try:
+            parsed = yaml.safe_load(raw) or {}
+        except Exception:
+            parsed = None
+        return {
+            "name": name, "raw_yaml": raw,
+            "parsed": parsed, "meta": _config_meta(p),
+        }
+
+    @app.put("/api/configs/{name}")
+    def put_config(name: str, body: ConfigPutBody) -> dict:
+        _safe_config_name(name)
+        try:
+            parsed = yaml.safe_load(body.raw_yaml)
+        except yaml.YAMLError as ex:
+            raise _err("yaml_invalid", f"YAML parse error: {ex}", status=400)
+        if not isinstance(parsed, dict):
+            raise _err("yaml_invalid",
+                       "top-level must be a mapping", status=400)
+        for required in ("pod", "paths", "model"):
+            if required not in parsed:
+                raise _err("yaml_invalid",
+                           f"missing required section: {required}",
+                           status=400)
+        p = _CONFIGS_DIR / name
+        from .store import _atomic_write_text
+        _atomic_write_text(p, body.raw_yaml)
+        return {"ok": True, "name": name, "meta": _config_meta(p)}
 
     @app.get("/api/runs/{run_id}/local-tail")
     def local_tail(run_id: str, offset: int = 0) -> dict:

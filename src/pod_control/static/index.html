@@ -46,6 +46,8 @@
           <ul id="movie-list" class="list"></ul>
 
           <h2>Saved batches</h2>
+          <input type="search" id="batch-search" class="search-input"
+                 placeholder="filter batches…" />
           <ul id="batch-list" class="list"></ul>
         </aside>
 
@@ -158,13 +160,18 @@
           <label>pod
             <select id="run-pod-sel"></select>
           </label>
-          <label>preset (optional)
-            <input id="run-preset" type="text" placeholder="configs/runpod.yaml" />
+          <label>preset
+            <span class="preset-row">
+              <select id="run-preset-sel"></select>
+              <button id="run-preset-edit-btn" class="inline-btn" type="button">Edit</button>
+            </span>
           </label>
+          <input id="run-preset" type="hidden" />
           <button class="btn-primary" id="run-launch-btn">Launch</button>
           <button class="btn-danger" id="run-kill-btn" disabled>Kill active</button>
           <span id="run-form-msg" class="muted"></span>
         </div>
+        <div id="run-preset-meta" class="muted preset-meta"></div>
         <div id="run-reset-hint" class="run-reset-hint"></div>
       </section>
 
@@ -175,8 +182,11 @@
 
       <section class="panel">
         <h2>History <small class="muted">(last 20)</small>
-          <button id="clear-history-btn" class="inline-btn btn-danger-sm">Clear</button>
+          <button id="clear-history-btn" class="inline-btn btn-danger-sm">Clear all</button>
+          <button id="hist-bulk-delete" class="inline-btn btn-danger-sm" disabled>Delete selected</button>
         </h2>
+        <input type="search" id="history-search" class="search-input"
+               placeholder="filter by id / batch / pod…" />
         <ul id="run-history" class="list"></ul>
       </section>
     </section>
@@ -238,7 +248,25 @@
   <footer>
     <span id="health-status">checking…</span>
     <span id="version"></span>
+    <button id="enable-notifs-btn" class="inline-btn footer-btn"
+            type="button" title="Enable browser notifications">🔔 Notify</button>
   </footer>
+
+  <!-- YAML editor modal (preset edit) -->
+  <div id="yaml-modal" class="modal-overlay" hidden>
+    <div class="modal-panel">
+      <div class="modal-header">
+        <h3 id="yaml-modal-title">Edit preset</h3>
+        <button id="yaml-modal-close" class="inline-btn" type="button">×</button>
+      </div>
+      <textarea id="yaml-modal-text" spellcheck="false"></textarea>
+      <div class="modal-footer">
+        <span id="yaml-modal-msg" class="muted"></span>
+        <button id="yaml-modal-save" class="btn-primary" type="button">Save</button>
+        <button id="yaml-modal-cancel" class="btn-secondary" type="button">Cancel</button>
+      </div>
+    </div>
+  </div>
 
   <script type="module" src="/static/app.js"></script>
 </body>

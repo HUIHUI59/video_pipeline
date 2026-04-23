@@ -113,3 +113,28 @@ def test_quick_launch_requires_pod_found(client):
     })
     assert r.status_code == 404
     assert r.json()["detail"]["error"]["code"] == "pod_not_found"
+
+
+def test_delete_single_run_404_when_missing(client):
+    c, _, _, _ = client
+    r = c.delete("/api/runs/nope-id")
+    assert r.status_code == 404
+    assert r.json()["detail"]["error"]["code"] == "run_not_found"
+
+
+def test_delete_single_run_removes_from_history(client, tmp_path):
+    c, _, _, _ = client
+    from src.pod_control.store import Store, RunRecord
+    s = Store(tmp_path / "data")
+    with s.state_lock() as state:
+        state.history = [
+            RunRecord(id="r1", batch_name="b1", pod_name="p", pid=1,
+                      status="done"),
+            RunRecord(id="r2", batch_name="b2", pod_name="p", pid=2,
+                      status="failed"),
+        ]
+    r = c.delete("/api/runs/r1")
+    assert r.status_code == 204
+    body = c.get("/api/runs").json()
+    ids = [h["id"] for h in body["history"]]
+    assert ids == ["r2"]

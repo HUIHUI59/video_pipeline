@@ -947,3 +947,144 @@ footer {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* ── Search inputs (batch list + history) ────────────────── */
+
+.search-input {
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  margin-bottom: 8px;
+  font-family: inherit;
+}
+.search-input:focus {
+  outline: none;
+  border-color: #7cb4f7;
+}
+
+/* ── Preset selector row ─────────────────────────────────── */
+
+.preset-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.preset-row select { flex: 1; min-width: 0; }
+.preset-meta {
+  font-size: 12px;
+  margin-top: 6px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── History rows: checkbox + delete-one ─────────────────── */
+
+.hist-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.hist-row .hist-check {
+  margin: 0 4px 0 0;
+  flex-shrink: 0;
+}
+.hist-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+.hist-id {
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  font-size: 11px;
+  color: var(--muted);
+}
+.hist-del-one {
+  flex-shrink: 0;
+  font-size: 11px;
+}
+
+/* ── Footer notify button ────────────────────────────────── */
+
+.footer-btn {
+  font-size: 11px;
+  padding: 2px 8px;
+  margin-left: 8px;
+}
+
+/* ── Log highlight (Monitor) ─────────────────────────────── */
+
+.log-error {
+  color: #ff7b7b;
+  background: rgba(255, 77, 77, 0.07);
+  display: inline-block;
+  width: 100%;
+}
+.log-warn {
+  color: #f5b342;
+}
+.log-stage-marker {
+  color: #7cb4f7;
+  font-weight: 600;
+}
+
+/* ── Modal overlay (YAML editor) ─────────────────────────── */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  backdrop-filter: blur(2px);
+}
+.modal-overlay[hidden] { display: none; }
+.modal-panel {
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  padding: 18px;
+  width: min(900px, 92vw);
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: 0 16px 48px rgba(0,0,0,.6);
+}
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.modal-header h3 { margin: 0; font-size: 15px; }
+.modal-panel textarea {
+  flex: 1;
+  min-height: 380px;
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px;
+  resize: vertical;
+}
+.modal-panel textarea:focus {
+  outline: none;
+  border-color: #7cb4f7;
+}
+.modal-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.modal-footer .muted { margin-right: auto; }

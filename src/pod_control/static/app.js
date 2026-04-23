@@ -262,6 +262,7 @@ async function loadBatches() {
       li.appendChild(del);
       ul.appendChild(li);
     }
+    _applyBatchSearch?.();
   } catch (err) {
     ul.innerHTML = `<li class="muted">${err.message}</li>`;
   }
@@ -736,18 +737,50 @@ function renderHistory(history) {
   const ul = $("#run-history");
   if (!history.length) {
     ul.innerHTML = `<li class="muted">no runs yet</li>`;
+    _refreshBulkDeleteState();
     return;
   }
-  ul.innerHTML = history
-    .map((h) => `
-      <li>
-        <span>${h.id}</span>
+  ul.innerHTML = history.map((h) => `
+    <li class="hist-row" data-id="${h.id}" data-search="${h.id} ${h.batch_name} ${h.pod_name}">
+      <input type="checkbox" class="hist-check" data-id="${h.id}" />
+      <span class="hist-meta">
+        <span class="hist-id">${h.id}</span>
         <span class="count">
-          ${h.batch_name} · <span class="run-status ${h.status}">${h.status}</span>
+          ${h.batch_name} · ${h.pod_name} ·
+          <span class="run-status ${h.status}">${h.status}</span>
           · exit=${h.exit_code ?? "—"}
         </span>
-      </li>`)
-    .join("");
+      </span>
+      <button class="delete-btn hist-del-one" data-id="${h.id}" type="button">delete</button>
+    </li>`).join("");
+
+  ul.querySelectorAll(".hist-check").forEach((cb) => {
+    cb.addEventListener("change", _refreshBulkDeleteState);
+  });
+  ul.querySelectorAll(".hist-del-one").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = btn.dataset.id;
+      if (!confirm(`delete history entry ${id}?`)) return;
+      try {
+        const r = await fetch(`/api/runs/${encodeURIComponent(id)}`,
+                              { method: "DELETE" });
+        if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}`);
+        await refreshRuns();
+      } catch (err) {
+        alert(err.message);
+      }
+    });
+  });
+  _applyHistorySearch();
+  _refreshBulkDeleteState();
+}
+
+function _refreshBulkDeleteState() {
+  const btn = $("#hist-bulk-delete");
+  if (!btn) return;
+  const checked = document.querySelectorAll(".hist-check:checked").length;
+  btn.disabled = checked === 0;
+  btn.textContent = checked > 0 ? `Delete selected (${checked})` : "Delete selected";
 }
 
 async function refreshRuns() {
@@ -991,7 +1024,7 @@ async function monitorPoll() {
     if (localBody.text) {
       monitorState.accLog += localBody.text;
       const pre = $("#monitor-log");
-      pre.textContent += localBody.text;
+      pre.innerHTML += highlightLogChunk(localBody.text);
       if ($("#monitor-autoscroll").checked) pre.scrollTop = pre.scrollHeight;
     }
     monitorState.localOffset = localBody.next_offset;
@@ -1009,7 +1042,8 @@ async function monitorPoll() {
         if (podBody.text) {
           monitorState.accLog += podBody.text;
           const pre = $("#monitor-log");
-          pre.textContent += `\n[pod-direct] ` + podBody.text;
+          pre.innerHTML += `\n<span class="log-stage-marker">[pod-direct]</span> ` +
+                           highlightLogChunk(podBody.text);
           if ($("#monitor-autoscroll").checked) pre.scrollTop = pre.scrollHeight;
         }
         monitorState.podLogOffset = podBody.next_offset;
@@ -1109,6 +1143,244 @@ $("#output-root-apply").addEventListener("click", async () => {
 
 // ── Bootstrap --------------------------------------------------------
 
+// ── Preset selector + YAML editor ───────────────────────────────────
+
+let _presets = [];
+
+async function loadPresets() {
+  const sel = $("#run-preset-sel");
+  if (!sel) return;
+  try {
+    const { configs } = await jsonOrThrow(await fetch("/api/configs"));
+    _presets = configs || [];
+    if (!_presets.length) {
+      sel.innerHTML = `<option value="">(no presets in configs/)</option>`;
+      $("#run-preset").value = "";
+      $("#run-preset-meta").textContent = "";
+      return;
+    }
+    sel.innerHTML = _presets.map((p) => {
+      const label = p.model ? `${p.name} — ${p.model}` : p.name;
+      return `<option value="${p.name}">${label}</option>`;
+    }).join("");
+    _onPresetChange();
+  } catch (err) {
+    sel.innerHTML = `<option value="">${err.message}</option>`;
+  }
+}
+
+function _onPresetChange() {
+  const sel = $("#run-preset-sel");
+  const name = sel.value;
+  $("#run-preset").value = name ? `configs/${name}` : "";
+  const p = _presets.find((x) => x.name === name);
+  if (!p) {
+    $("#run-preset-meta").textContent = "";
+    return;
+  }
+  const parts = [];
+  if (p.model) parts.push(`Model: ${p.model}`);
+  if (p.max_model_len) parts.push(`Context: ${p.max_model_len}`);
+  if (p.rounds) parts.push(`Rounds: ${p.rounds}`);
+  if (p.error) parts.push(`⚠ ${p.error}`);
+  $("#run-preset-meta").textContent = parts.join(" · ");
+}
+
+function _initYamlModal() {
+  const sel = $("#run-preset-sel");
+  if (sel) sel.addEventListener("change", _onPresetChange);
+
+  const editBtn = $("#run-preset-edit-btn");
+  const modal = $("#yaml-modal");
+  const ta = $("#yaml-modal-text");
+  const msg = $("#yaml-modal-msg");
+  const title = $("#yaml-modal-title");
+
+  if (!editBtn || !modal) return;
+
+  function open() {
+    modal.hidden = false;
+    document.addEventListener("keydown", _escClose);
+  }
+  function close() {
+    modal.hidden = true;
+    msg.textContent = "";
+    document.removeEventListener("keydown", _escClose);
+  }
+  function _escClose(e) { if (e.key === "Escape") close(); }
+
+  editBtn.addEventListener("click", async () => {
+    const name = $("#run-preset-sel").value;
+    if (!name) { alert("no preset selected"); return; }
+    title.textContent = `Edit ${name}`;
+    ta.value = "loading…";
+    msg.textContent = "";
+    open();
+    try {
+      const data = await jsonOrThrow(
+        await fetch(`/api/configs/${encodeURIComponent(name)}`)
+      );
+      ta.value = data.raw_yaml;
+      ta.dataset.name = name;
+    } catch (err) {
+      ta.value = "";
+      msg.textContent = err.message;
+    }
+  });
+  $("#yaml-modal-close").addEventListener("click", close);
+  $("#yaml-modal-cancel").addEventListener("click", close);
+  $("#yaml-modal-save").addEventListener("click", async () => {
+    const name = ta.dataset.name;
+    msg.textContent = "saving…";
+    try {
+      const r = await fetch(`/api/configs/${encodeURIComponent(name)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ raw_yaml: ta.value }),
+      });
+      const data = await jsonOrThrow(r);
+      msg.textContent = `saved · model=${data.meta?.model ?? "?"}`;
+      await loadPresets();
+      // restore selection
+      const s = $("#run-preset-sel");
+      if ([...s.options].some((o) => o.value === name)) s.value = name;
+      _onPresetChange();
+      setTimeout(close, 600);
+    } catch (err) {
+      msg.textContent = err.message;
+    }
+  });
+  modal.addEventListener("click", (e) => {
+    if (e.target === modal) close();
+  });
+}
+
+// ── Search filters (batch list + history) ───────────────────────────
+
+function _initSearchInputs() {
+  const bs = $("#batch-search");
+  if (bs) bs.addEventListener("input", () => _applyBatchSearch());
+  const hs = $("#history-search");
+  if (hs) hs.addEventListener("input", () => _applyHistorySearch());
+}
+
+function _applyBatchSearch() {
+  const q = ($("#batch-search")?.value || "").toLowerCase().trim();
+  document.querySelectorAll("#batch-list li").forEach((li) => {
+    const txt = li.textContent.toLowerCase();
+    li.hidden = q && !txt.includes(q);
+  });
+}
+
+function _applyHistorySearch() {
+  const q = ($("#history-search")?.value || "").toLowerCase().trim();
+  document.querySelectorAll("#run-history .hist-row").forEach((li) => {
+    const txt = (li.dataset.search || "").toLowerCase();
+    li.hidden = q && !txt.includes(q);
+  });
+}
+
+// ── Bulk delete history ─────────────────────────────────────────────
+
+function _initBulkDelete() {
+  const btn = $("#hist-bulk-delete");
+  if (!btn) return;
+  btn.addEventListener("click", async () => {
+    const ids = [...document.querySelectorAll(".hist-check:checked")]
+      .map((cb) => cb.dataset.id);
+    if (!ids.length) return;
+    if (!confirm(`delete ${ids.length} run(s) from history?`)) return;
+    let failed = 0;
+    for (const id of ids) {
+      try {
+        const r = await fetch(`/api/runs/${encodeURIComponent(id)}`,
+                              { method: "DELETE" });
+        if (!r.ok && r.status !== 204) failed++;
+      } catch (_) { failed++; }
+    }
+    if (failed) alert(`${failed} delete(s) failed`);
+    await refreshRuns();
+  });
+}
+
+// ── Browser notifications ───────────────────────────────────────────
+
+function _initNotifications() {
+  const btn = $("#enable-notifs-btn");
+  if (!btn || !("Notification" in window)) {
+    if (btn) btn.hidden = true;
+    return;
+  }
+  function refreshLabel() {
+    const p = Notification.permission;
+    btn.textContent = p === "granted" ? "🔔 On" : (p === "denied" ? "🔕 Blocked" : "🔔 Notify");
+    btn.disabled = p === "denied";
+  }
+  refreshLabel();
+  btn.addEventListener("click", async () => {
+    if (Notification.permission === "default") {
+      await Notification.requestPermission();
+    }
+    refreshLabel();
+  });
+}
+
+function _fireRunNotification(record) {
+  if (!("Notification" in window) || Notification.permission !== "granted") return;
+  const title = `Run ${record.status}`;
+  const body = `${record.batch_name} on ${record.pod_name} · exit=${record.exit_code ?? "—"}`;
+  try { new Notification(title, { body, icon: "/favicon.ico" }); } catch (_) {}
+}
+
+let _lastSeenActiveId = sessionStorage.getItem("podc_lastActiveId") || null;
+
+function _initMonitorRunWatcher() {
+  // Piggyback on the existing 3s refreshRuns poll in startRunPolling.
+  // Wrap refreshRuns once to detect transition from active → finished.
+  const orig = refreshRuns;
+  refreshRuns = async function watchedRefresh() {
+    await orig();
+    try {
+      const data = await jsonOrThrow(await fetch("/api/runs"));
+      const cur = data.active?.[0]?.id || null;
+      if (_lastSeenActiveId && !cur) {
+        // Active just disappeared → check if history[0] is the same id.
+        const finished = data.history?.find((h) => h.id === _lastSeenActiveId);
+        if (finished) _fireRunNotification(finished);
+      }
+      _lastSeenActiveId = cur;
+      sessionStorage.setItem("podc_lastActiveId", cur || "");
+    } catch (_) { /* polling errors handled in orig */ }
+  };
+}
+
+// ── Log highlight (Monitor) ─────────────────────────────────────────
+
+function _escapeHtml(s) {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function highlightLogChunk(text) {
+  const lines = text.split("\n");
+  const out = lines.map((line) => {
+    const esc = _escapeHtml(line);
+    if (/\[pod_control:stage=/.test(line)) {
+      return `<span class="log-stage-marker">${esc}</span>`;
+    }
+    if (/(ERROR|Traceback|\[ERR\]|FAIL)/i.test(line)) {
+      return `<span class="log-error">${esc}</span>`;
+    }
+    if (/(WARN|\[WARN\])/i.test(line)) {
+      return `<span class="log-warn">${esc}</span>`;
+    }
+    return esc;
+  });
+  return out.join("\n");
+}
+
 renderCategoryChecks();
 resetPodForm();
 pingHealth();
@@ -1118,4 +1390,10 @@ loadBatches();
 loadPods();
 populateDirectPodSel();
 populateRunSelectors();
+loadPresets();
 refreshRuns();
+_initSearchInputs();
+_initBulkDelete();
+_initYamlModal();
+_initNotifications();
+_initMonitorRunWatcher();
