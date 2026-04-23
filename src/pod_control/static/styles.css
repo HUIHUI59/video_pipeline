@@ -614,36 +614,52 @@ label {
 
 /* ── Run tab ──────────────────────────────────────────────── */
 
-.run-form {
+/* Top selector grid: batch / pod / preset+Edit. Each cell is fluid. */
+.launch-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 14px 18px;
+  margin-bottom: 14px;
   align-items: end;
 }
-
-.run-form > label {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  color: var(--muted);
+.launch-grid .field { gap: 6px; }
+.launch-grid .field label {
   font-size: 11px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+  color: var(--muted);
 }
-.run-form > label select,
-.run-form > label input {
-  font-size: 13px;
-  letter-spacing: 0;
-  text-transform: none;
-  color: var(--text);
+.launch-grid select {
   width: 100%;
+  box-sizing: border-box;
+  height: 36px;
+  padding: 6px 10px;
+  font-size: 13px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
 }
 
-.run-form > button {
-  align-self: end;
+/* Action row: Launch | Kill | message */
+.launch-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+.launch-actions .btn-primary,
+.launch-actions .btn-danger {
   height: 36px;
 }
-.run-form > input[type="hidden"] { display: none; }
+.launch-actions .launch-msg {
+  margin-left: auto;
+  font-size: 12px;
+  text-align: right;
+  min-width: 0;
+  flex: 1 1 200px;
+}
 
 .run-reset-hint {
   display: flex;
@@ -1001,28 +1017,36 @@ footer #version { margin-right: auto; }   /* push notify button to the right edg
   align-items: center;
 }
 
+/* preset cell: select + Edit button side by side, equal height */
 .preset-row {
   display: flex;
   gap: 6px;
   align-items: stretch;
-  text-transform: none;          /* defeat parent .run-form > label uppercase */
-  letter-spacing: 0;
-  font-size: 13px;
 }
-.preset-row select { flex: 1; min-width: 0; text-transform: none; letter-spacing: 0; }
+.preset-row select { flex: 1; min-width: 0; }
 .preset-row .inline-btn {
   flex-shrink: 0;
+  height: 36px;                 /* match select height */
   font-size: 12px;
-  padding: 4px 12px;
+  padding: 0 14px;
   text-transform: none;
   letter-spacing: 0;
 }
+
+/* Preset metadata bar — shown only when filled */
 .preset-meta {
   font-size: 12px;
-  margin-top: 8px;
+  padding: 8px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
+.preset-meta:empty { display: none; }
+
+/* Lock body scroll when modal is open to avoid scrollbar shift */
+body.modal-open { overflow: hidden; }
 
 /* ── History rows: checkbox + delete-one ─────────────────── */
 

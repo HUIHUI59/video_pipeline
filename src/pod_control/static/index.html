@@ -153,25 +153,34 @@
     <section id="tab-run" class="tab">
       <section class="panel" id="run-launcher">
         <h2>Launch run</h2>
-        <div class="run-form">
-          <label>batch
+
+        <div class="launch-grid">
+          <div class="field">
+            <label for="run-batch-sel">batch</label>
             <select id="run-batch-sel"></select>
-          </label>
-          <label>pod
+          </div>
+          <div class="field">
+            <label for="run-pod-sel">pod</label>
             <select id="run-pod-sel"></select>
-          </label>
-          <label>preset
-            <span class="preset-row">
+          </div>
+          <div class="field field-preset">
+            <label for="run-preset-sel">preset</label>
+            <div class="preset-row">
               <select id="run-preset-sel"></select>
               <button id="run-preset-edit-btn" class="inline-btn" type="button">Edit</button>
-            </span>
-          </label>
-          <input id="run-preset" type="hidden" />
+            </div>
+          </div>
+        </div>
+
+        <div id="run-preset-meta" class="preset-meta muted"></div>
+
+        <div class="launch-actions">
           <button class="btn-primary" id="run-launch-btn">Launch</button>
           <button class="btn-danger" id="run-kill-btn" disabled>Kill active</button>
-          <span id="run-form-msg" class="muted"></span>
+          <span id="run-form-msg" class="muted launch-msg"></span>
         </div>
-        <div id="run-preset-meta" class="muted preset-meta"></div>
+
+        <input id="run-preset" type="hidden" />
         <div id="run-reset-hint" class="run-reset-hint"></div>
       </section>
 

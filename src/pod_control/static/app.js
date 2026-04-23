@@ -1200,10 +1200,12 @@ function _initYamlModal() {
 
   function open() {
     modal.hidden = false;
+    document.body.classList.add("modal-open");
     document.addEventListener("keydown", _escClose);
   }
   function close() {
     modal.hidden = true;
+    document.body.classList.remove("modal-open");
     msg.textContent = "";
     document.removeEventListener("keydown", _escClose);
   }
