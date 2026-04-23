@@ -181,10 +181,13 @@
       </section>
 
       <section class="panel">
-        <h2>History <small class="muted">(last 20)</small>
-          <button id="clear-history-btn" class="inline-btn btn-danger-sm">Clear all</button>
-          <button id="hist-bulk-delete" class="inline-btn btn-danger-sm" disabled>Delete selected</button>
-        </h2>
+        <div class="panel-header-row">
+          <h2>History <small class="muted">(last 20)</small></h2>
+          <div class="panel-header-actions">
+            <button id="hist-bulk-delete" class="inline-btn btn-danger-sm" disabled>Delete selected</button>
+            <button id="clear-history-btn" class="inline-btn btn-danger-sm">Clear all</button>
+          </div>
+        </div>
         <input type="search" id="history-search" class="search-input"
                placeholder="filter by id / batch / pod…" />
         <ul id="run-history" class="list"></ul>
