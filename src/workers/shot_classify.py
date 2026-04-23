@@ -26,6 +26,8 @@ Stage 4：镜头预分类
 import argparse
 import atexit
 import concurrent.futures
+import contextlib
+import fcntl
 import json
 import logging
 import os
@@ -60,7 +62,8 @@ except OSError:
 # 全局配置
 # ══════════════════════════════════════════════════════════════
 
-DEFAULT_WORKERS        = 1                 # YOLO 串行在 GPU，单线程即可
+DEFAULT_WORKERS        = 2                 # 2 worker 让 GPU 推理与下一帧的 IO/解码 overlap；
+                                            # face detector 现已 thread-local，可安全并发
 HEARTBEAT_INTERVAL     = 60
 DEFAULT_MODEL          = "yolov8l.pt"       # Large：COCO person AP ~52，首次自动下载 ~90MB
 DEFAULT_FACE_MODEL     = "yolov8n-face.pt"  # 社区脸检测模型，首次自动下载 ~6MB
@@ -165,15 +168,17 @@ def get_yolo(model_path: str):
 # ── 脸检测 tier fallback ─────────────────────────────────────────────
 # 优先级：
 #   0. MediaPipe Tasks FaceDetector（blaze_face_full_range.tflite, conf>=0.5）
-#      — 精度高、假阳性少（画 / 雕像 / 反光基本不误判）
 #   1. 本地已下载的 YOLO face 模型（yolo_face_path，若存在）
 #   2. OpenCV Haar Cascade（opencv-python 自带）—— 最后兜底
 #   3. None —— 警告后降级为仅人体检测
 #
-# 注意：MediaPipe FaceDetector 实例在进程内共享，不是线程安全。
-# 当前 classify 默认 --workers 1，安全。如未来改多 worker，每个 worker 应自建实例。
-_face_detector = None
-_face_backend: str = ""          # "mediapipe" | "yolo_face" | "haar" | "none"
+# Thread-local backend instance: mediapipe FaceDetector is NOT thread-safe.
+# Each worker thread builds its own detector via get_face_detector(); the
+# backend kind ("mediapipe" / "yolo_face" / "haar" / "none") is selected
+# once globally to keep priority logic consistent across workers.
+_face_tls = threading.local()           # per-thread (detector, backend)
+_face_backend_global: str | None = None # cached "kind" picked once
+_face_yolo_path: str | None = None      # remembered yolo_face_path arg
 _face_lock = threading.Lock()
 MEDIAPIPE_MIN_CONF = 0.5         # 教授标准
 # 官方 Google Cloud 下载链接；换成镜像就改这一行
@@ -200,68 +205,92 @@ def _mediapipe_model_path() -> str:
     return str(p)
 
 
-def get_face_detector(yolo_face_path: str | None = None):
-    global _face_detector, _face_backend
-    if _face_detector is not None or _face_backend == "none":
-        return _face_detector, _face_backend
-    with _face_lock:
-        if _face_detector is not None or _face_backend == "none":
-            return _face_detector, _face_backend
-
-        # 0) 优先用 MediaPipe Tasks FaceDetector（0.10.30+ 官方 API）
-        try:
-            import mediapipe as mp  # noqa: F401 — ensure package importable
-            from mediapipe.tasks import python as mp_py
-            from mediapipe.tasks.python import vision as mp_vision
-            model_path = _mediapipe_model_path()
-            base = mp_py.BaseOptions(model_asset_path=model_path)
-            opts = mp_vision.FaceDetectorOptions(
-                base_options=base,
-                min_detection_confidence=MEDIAPIPE_MIN_CONF,
-            )
-            fd = mp_vision.FaceDetector.create_from_options(opts)
-            _face_detector = fd
-            _face_backend = "mediapipe"
-            log.info(
-                f"脸检测：使用 MediaPipe Tasks FaceDetector "
-                f"(full-range, conf>={MEDIAPIPE_MIN_CONF})"
-            )
-            return _face_detector, _face_backend
-        except Exception as e:
-            log.info(f"MediaPipe 不可用 ({e})，fallback 到 YOLO/Haar")
-
-        # 1) 本地 YOLO face 模型
-        if yolo_face_path:
-            try:
-                from ultralytics import YOLO
-                p = Path(yolo_face_path).expanduser()
-                if p.exists():
-                    _face_detector = YOLO(str(p))
-                    _face_backend = "yolo_face"
-                    log.info(f"脸检测：使用 YOLO {yolo_face_path}")
-                    return _face_detector, _face_backend
-            except Exception as e:
-                log.info(f"YOLO face 模型不可用 ({e})，使用 OpenCV Haar")
-
-        # 2) OpenCV Haar Cascade（opencv-python 自带）
-        try:
-            import cv2
-            xml = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-            cas = cv2.CascadeClassifier(xml)
-            if cas.empty():
-                raise RuntimeError(f"Haar cascade xml 加载为空: {xml}")
-            _face_detector = cas
-            _face_backend = "haar"
-            log.info("脸检测：使用 OpenCV Haar Cascade（兜底）")
-            return _face_detector, _face_backend
-        except Exception as e:
-            log.warning(f"Haar Cascade 加载失败 ({e})")
-
-        _face_backend = "none"
-        log.warning(
-            "所有脸检测后端均不可用。分类器只用人体检测，有人的镜头会归 wide。"
+def _build_face_detector(backend: str, yolo_face_path: str | None):
+    """Construct a fresh detector instance for the given backend kind.
+    Called once per thread by get_face_detector — mediapipe FaceDetector
+    is NOT thread-safe so each worker thread holds its own copy."""
+    if backend == "mediapipe":
+        import mediapipe as mp  # noqa: F401
+        from mediapipe.tasks import python as mp_py
+        from mediapipe.tasks.python import vision as mp_vision
+        base = mp_py.BaseOptions(model_asset_path=_mediapipe_model_path())
+        opts = mp_vision.FaceDetectorOptions(
+            base_options=base,
+            min_detection_confidence=MEDIAPIPE_MIN_CONF,
         )
-        return None, _face_backend
+        return mp_vision.FaceDetector.create_from_options(opts)
+    if backend == "yolo_face" and yolo_face_path:
+        from ultralytics import YOLO
+        return YOLO(str(Path(yolo_face_path).expanduser()))
+    if backend == "haar":
+        import cv2
+        xml = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+        return cv2.CascadeClassifier(xml)
+    return None
+
+
+def get_face_detector(yolo_face_path: str | None = None):
+    """Return (detector, backend) for the CURRENT thread.
+
+    Backend kind is selected once globally (priority: mediapipe → yolo →
+    haar → none) the first time any thread calls in. Each thread then
+    instantiates its own detector instance lazily so mediapipe's lack of
+    thread-safety doesn't cause races across workers.
+
+    Detection results are bit-identical to the previous single-instance
+    version: same model path, same conf threshold, same backend.
+    """
+    global _face_backend_global, _face_yolo_path
+    # Fast path: this thread already has an instance.
+    cached = getattr(_face_tls, "value", None)
+    if cached is not None:
+        return cached
+    # First-call path: pick the backend kind once, globally.
+    with _face_lock:
+        if _face_backend_global is None:
+            _face_yolo_path = yolo_face_path
+            picked = None
+            for kind in ("mediapipe", "yolo_face", "haar"):
+                try:
+                    inst = _build_face_detector(kind, yolo_face_path)
+                    if inst is None:
+                        continue
+                    if kind == "haar" and getattr(inst, "empty", lambda: False)():
+                        raise RuntimeError("Haar cascade xml empty")
+                    picked = kind
+                    label = {
+                        "mediapipe": f"MediaPipe Tasks FaceDetector "
+                                     f"(full-range, conf>={MEDIAPIPE_MIN_CONF})",
+                        "yolo_face": f"YOLO {yolo_face_path}",
+                        "haar": "OpenCV Haar Cascade (fallback)",
+                    }[kind]
+                    log.info(f"脸检测：使用 {label}")
+                    # We just built one — keep it for THIS thread.
+                    _face_tls.value = (inst, kind)
+                    break
+                except Exception as e:
+                    log.info(f"{kind} 不可用 ({e})")
+            if picked is None:
+                _face_backend_global = "none"
+                log.warning("所有脸检测后端均不可用。分类器只用人体检测。")
+            else:
+                _face_backend_global = picked
+            if cached is None and getattr(_face_tls, "value", None) is not None:
+                return _face_tls.value
+    # Backend kind already known — this thread just needs its own instance.
+    backend = _face_backend_global
+    if backend == "none":
+        _face_tls.value = (None, "none")
+        return _face_tls.value
+    try:
+        inst = _build_face_detector(backend, _face_yolo_path)
+    except Exception as e:
+        log.warning(f"thread-local face detector init failed ({e}); "
+                    f"falling back to no face detection in this thread")
+        inst = None
+        backend = "none"
+    _face_tls.value = (inst, backend)
+    return _face_tls.value
 
 
 def detect_faces(frame) -> tuple[int, list[float]]:
@@ -316,13 +345,47 @@ def detect_faces(frame) -> tuple[int, list[float]]:
     return 0, []
 
 
-def _manifest_lock(path: str) -> threading.Lock:
+@contextlib.contextmanager
+def _manifest_lock(path: str):
+    """Cross-process advisory lock around manifest append.
+
+    Old code used threading.Lock — only protected within ONE process. With
+    distributed_dispatch spawning shot_classify on multiple machines all
+    writing the same SMB-shared <movie>.jsonl, that produced byte-level
+    interleaving (truncated rows / "Extra data" / empty lines that
+    pod_control then warned about).
+
+    fcntl.flock(LOCK_EX) is honored cross-process by both local fs and
+    SMB/NFS mounts (with `lock` mount option, which is the default).
+    Each manifest path gets a sidecar `.lock` file (zero-byte) used only
+    as the lock target — the manifest itself is opened separately as
+    append-only, never truncated, so already-classified rows are never
+    touched.
+
+    Also keeps the in-process threading.Lock layer to serialize within
+    one machine's worker pool BEFORE racing for the cross-machine flock.
+    """
+    # In-process serialization first (cheap, prevents N threads piling on
+    # the kernel lock).
     with _manifest_lock_guard:
-        lk = _manifest_locks.get(path)
-        if lk is None:
-            lk = threading.Lock()
-            _manifest_locks[path] = lk
-        return lk
+        thr_lk = _manifest_locks.get(path)
+        if thr_lk is None:
+            thr_lk = threading.Lock()
+            _manifest_locks[path] = thr_lk
+    lock_path = path + ".lock"
+    Path(lock_path).parent.mkdir(parents=True, exist_ok=True)
+    with thr_lk:
+        # Cross-process advisory lock via sidecar file.
+        fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o644)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            except Exception:
+                pass
+            os.close(fd)
 
 
 def _compute_camera_motion(
@@ -396,13 +459,8 @@ def _compute_quality(frame) -> dict:
 
 
 def _detect_boxes(yolo_model, frame, conf: float, class_filter=None):
-    """
-    返回 (count, ratios, bboxes_norm) —
-      - count：检测框个数
-      - ratios：每个框面积占整帧比例
-      - bboxes_norm：每个框 [x1, y1, x2, y2] 归一化到 [0, 1]（除以帧宽/高）
-    模型为 None 或检测失败时返回 (0, [], [])。
-    """
+    """Single-frame YOLO. Kept as backward-compat shim; classify_one
+    uses _detect_boxes_batch for the actual hot path."""
     if yolo_model is None:
         return 0, [], []
     try:
@@ -428,6 +486,56 @@ def _detect_boxes(yolo_model, frame, conf: float, class_filter=None):
         for row in xyxy
     ]
     return len(boxes), ratios, bboxes_norm
+
+
+def _detect_boxes_batch(yolo_model, frames: list, conf: float,
+                        class_filter=None):
+    """Batched YOLO inference. ultralytics natively accepts a list of
+    np.ndarrays and runs ONE GPU forward — but per-image NMS / decoding
+    is still independent, so the result for each frame is bit-equivalent
+    to calling the model on that frame alone. Same conf threshold, same
+    class filter, no letterbox surprises (frames here all share the same
+    video resolution).
+
+    Returns list of (count, ratios, bboxes_norm) in input order, matching
+    the per-frame shape of _detect_boxes.
+    """
+    if yolo_model is None or not frames:
+        return [(0, [], []) for _ in frames]
+    try:
+        if class_filter is not None:
+            results = yolo_model(frames, conf=conf, classes=class_filter,
+                                 verbose=False)
+        else:
+            results = yolo_model(frames, conf=conf, verbose=False)
+    except Exception:
+        return [(0, [], []) for _ in frames]
+    out = []
+    for frame, det in zip(frames, results):
+        h, w = frame.shape[:2]
+        area = max(w * h, 1)
+        boxes = getattr(det, "boxes", None)
+        if boxes is None or len(boxes) == 0:
+            out.append((0, [], []))
+            continue
+        xyxy = boxes.xyxy.cpu().numpy()
+        ratios = ((xyxy[:, 2] - xyxy[:, 0]) * (xyxy[:, 3] - xyxy[:, 1]) / area).tolist()
+        hh = float(max(h, 1)); ww = float(max(w, 1))
+        bboxes_norm = [
+            [float(row[0] / ww), float(row[1] / hh),
+             float(row[2] / ww), float(row[3] / hh)]
+            for row in xyxy
+        ]
+        out.append((len(boxes), ratios, bboxes_norm))
+    return out
+
+
+def _detect_faces_batch(frames: list) -> list[tuple[int, list[float]]]:
+    """Per-frame face detection. mediapipe doesn't truly batch; this
+    centralizes the call site and uses thread-local backends so multi-
+    worker classify is safe (mediapipe FaceDetector is NOT thread-safe).
+    Result per frame is bit-equivalent to detect_faces(frame)."""
+    return [detect_faces(f) for f in frames]
 
 # ══════════════════════════════════════════════════════════════
 # 单任务：分类一个 clip
@@ -494,26 +602,59 @@ def classify_one(src: str, manifest_dir: str,
             if queue: queue.mark_failed(src, res.error)
             return res
 
-        # 采样多帧；每帧：person + face + quality
-        per_frame: list[dict] = []  # {"persons":N, "p_ratios":[...],
-                                     #  "faces":N, "f_ratios":[...],
-                                     #  "quality":{mean_brightness,...}}
-        for frac in sample_fracs:
-            idx = max(0, min(frame_count - 1, int(frame_count * frac)))
-            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+        # ── Sequential frame collection (precision: better than seek) ──
+        # cv2 cap.set(POS_FRAMES) on H.264 is NOT frame-accurate (it
+        # snaps to the nearest keyframe). Sequential read is exact, AND
+        # avoids slow random-seek over SMB shares. We compute the target
+        # indices first, then read sequentially keeping only the targets.
+        target_indices = sorted({
+            max(0, min(frame_count - 1, int(frame_count * frac)))
+            for frac in sample_fracs
+        })
+        sampled_frames: list = []
+        cur_idx = 0
+        next_target_pos = 0
+        while next_target_pos < len(target_indices):
+            target = target_indices[next_target_pos]
+            # Skip-read until we reach `target`. cv2.read() advances
+            # one frame and decodes; passing grab() instead avoids
+            # decode for the throwaway frames in between.
+            while cur_idx < target:
+                if not cap.grab():
+                    break
+                cur_idx += 1
+            if cur_idx != target:
+                break
             ok, frame = cap.read()
             if not ok or frame is None:
+                next_target_pos += 1
+                cur_idx += 1
                 continue
-            p_n, p_r, p_bb = _detect_boxes(yolo_person, frame,
-                                           person_conf, class_filter=[0])
-            f_n, f_r = detect_faces(frame)
+            sampled_frames.append(frame)
+            cur_idx += 1
+            next_target_pos += 1
+
+        # ── Batched detection (precision: bit-equivalent to per-frame) ──
+        # ultralytics accepts list[np.ndarray] → 1 GPU forward for N
+        # frames. NMS / decoding still per-image, so per-frame results
+        # match what we would have gotten calling the model on each
+        # frame individually.
+        person_results = _detect_boxes_batch(
+            yolo_person, sampled_frames, person_conf, class_filter=[0]
+        )
+        face_results = _detect_faces_batch(sampled_frames)
+
+        per_frame: list[dict] = []
+        for frame, (p_n, p_r, p_bb), (f_n, f_r) in zip(
+            sampled_frames, person_results, face_results
+        ):
             per_frame.append({
                 "persons":  p_n, "p_ratios": p_r, "p_bboxes": p_bb,
                 "faces":    f_n, "f_ratios": f_r,
                 "quality":  _compute_quality(frame),
             })
 
-        # 光流抖动检测（cap 释放前；必须在这里做）
+        # 光流抖动检测（必须在 cap 释放前；本身只读不写，安全）
         camera_motion: Optional[float] = None
         if not skip_motion_detect:
             camera_motion = _compute_camera_motion(cap, mid_idx=frame_count // 2)

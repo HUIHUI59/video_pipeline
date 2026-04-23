@@ -178,9 +178,12 @@ def test_manifestentry_accepts_camera_motion_field():
 def test_face_detector_falls_back_when_mediapipe_missing(monkeypatch):
     """没有 mediapipe 包时 get_face_detector 不崩，回落到 Haar 兜底。"""
     import shot_classify
-    # 强制每次调用重新决定 backend
-    monkeypatch.setattr(shot_classify, "_face_detector", None)
-    monkeypatch.setattr(shot_classify, "_face_backend", "")
+    import threading as _threading
+    # Reset thread-local + global backend so this test forces re-detection
+    # (face detector is now thread-local; mediapipe FaceDetector is not
+    # thread-safe, each worker thread builds its own instance).
+    monkeypatch.setattr(shot_classify, "_face_tls", _threading.local())
+    monkeypatch.setattr(shot_classify, "_face_backend_global", None)
 
     # 让 `import mediapipe` 抛 ImportError
     import builtins
