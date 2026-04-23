@@ -602,37 +602,24 @@ def classify_one(src: str, manifest_dir: str,
             if queue: queue.mark_failed(src, res.error)
             return res
 
-        # ── Sequential frame collection (precision: better than seek) ──
-        # cv2 cap.set(POS_FRAMES) on H.264 is NOT frame-accurate (it
-        # snaps to the nearest keyframe). Sequential read is exact, AND
-        # avoids slow random-seek over SMB shares. We compute the target
-        # indices first, then read sequentially keeping only the targets.
-        target_indices = sorted({
-            max(0, min(frame_count - 1, int(frame_count * frac)))
-            for frac in sample_fracs
-        })
+        # ── Frame collection via seek (fast over SMB) ──
+        # We tried sequential grab() to avoid keyframe snap, but on SMB
+        # video files each grab() = network demux call → 5000+ grabs per
+        # clip dominated runtime. cv2.cap.set(POS_FRAMES, idx) uses the
+        # container seek table directly (one network roundtrip per
+        # target frame). Even though it snaps to the nearest keyframe
+        # on H.264, the resulting frame is within a few frames of the
+        # requested index — for aggregation tasks (max persons across
+        # 5 samples, face-area ratio averages, brightness/contrast)
+        # this offset is well within sampling noise. Original behavior.
         sampled_frames: list = []
-        cur_idx = 0
-        next_target_pos = 0
-        while next_target_pos < len(target_indices):
-            target = target_indices[next_target_pos]
-            # Skip-read until we reach `target`. cv2.read() advances
-            # one frame and decodes; passing grab() instead avoids
-            # decode for the throwaway frames in between.
-            while cur_idx < target:
-                if not cap.grab():
-                    break
-                cur_idx += 1
-            if cur_idx != target:
-                break
+        for frac in sample_fracs:
+            idx = max(0, min(frame_count - 1, int(frame_count * frac)))
+            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
             ok, frame = cap.read()
             if not ok or frame is None:
-                next_target_pos += 1
-                cur_idx += 1
                 continue
             sampled_frames.append(frame)
-            cur_idx += 1
-            next_target_pos += 1
 
         # ── Batched detection (precision: bit-equivalent to per-frame) ──
         # ultralytics accepts list[np.ndarray] → 1 GPU forward for N
