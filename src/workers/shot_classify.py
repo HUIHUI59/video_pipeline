@@ -23,6 +23,15 @@ Stage 4：镜头预分类
 ════════════════════════════════════════════════════════════════
 """
 
+import os
+
+# Suppress noisy stderr logs from absl / mediapipe / TFLite. MUST be set
+# before `import mediapipe` or the library reads the old values. Harmless
+# (these are all info/warnings about init state, no real issue).
+os.environ.setdefault("GLOG_minloglevel", "3")          # absl: 3=ERROR only
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")      # TensorFlow Lite: 3=ERROR only
+os.environ.setdefault("MEDIAPIPE_DISABLE_GPU", "0")     # (keep; not a log flag)
+
 import argparse
 import atexit
 import concurrent.futures
@@ -30,7 +39,6 @@ import contextlib
 import fcntl
 import json
 import logging
-import os
 import signal
 import socket
 import statistics  # noqa: F401 — kept for potential external use in run_queue extension
@@ -41,6 +49,23 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
+
+
+@contextlib.contextmanager
+def _suppress_stderr():
+    """Redirect stderr at the OS fd level so C-extension prints
+    (mediapipe / absl / TFLite) are silenced, then restore. Used
+    around mediapipe FaceDetector creation because it prints a flurry
+    of init lines that can't be controlled from Python alone."""
+    saved_fd = os.dup(2)
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    try:
+        os.dup2(devnull, 2)
+        yield
+    finally:
+        os.dup2(saved_fd, 2)
+        os.close(devnull)
+        os.close(saved_fd)
 
 if TYPE_CHECKING:
     from common.task_queue import TaskQueue
@@ -218,7 +243,10 @@ def _build_face_detector(backend: str, yolo_face_path: str | None):
             base_options=base,
             min_detection_confidence=MEDIAPIPE_MIN_CONF,
         )
-        return mp_vision.FaceDetector.create_from_options(opts)
+        # Silence C-extension stderr prints (EGL/XNNPACK/feedback manager
+        # init lines) during creation — they're all informational.
+        with _suppress_stderr():
+            return mp_vision.FaceDetector.create_from_options(opts)
     if backend == "yolo_face" and yolo_face_path:
         from ultralytics import YOLO
         return YOLO(str(Path(yolo_face_path).expanduser()))
@@ -264,7 +292,11 @@ def get_face_detector(yolo_face_path: str | None = None):
                         "yolo_face": f"YOLO {yolo_face_path}",
                         "haar": "OpenCV Haar Cascade (fallback)",
                     }[kind]
-                    log.info(f"脸检测：使用 {label}")
+                    # In multi-process mode each child re-inits mediapipe and
+                    # would log this line again; demote to DEBUG so the
+                    # dispatcher's aggregated stdout stays quiet. Main
+                    # process logs via the initial dispatcher startup echo.
+                    log.debug(f"脸检测：使用 {label}")
                     # We just built one — keep it for THIS thread.
                     _face_tls.value = (inst, kind)
                     break
