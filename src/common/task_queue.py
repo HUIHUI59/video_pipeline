@@ -22,7 +22,7 @@ v3.0 关键改进（解决共享网络文件系统上的队列数据丢失问题
 ════════════════════════════════════════════════════════════════
 """
 
-import os, json, time, fcntl, socket, logging, hashlib
+import os, json, time, fcntl, socket, logging, hashlib, threading
 from pathlib import Path
 from typing import Optional
 
@@ -40,6 +40,14 @@ class TaskQueue:
         self._done_log  = self.queue_dir / f"{queue_name}.done.log"
         self.worker_id  = worker_id or socket.gethostname()
         self._lock_fd   = None
+        # In-process dedupe of currently-claimed src paths.
+        # Required when multiple worker threads in ONE process share the
+        # same worker_id: _try_claim_file's "owner == self.worker_id →
+        # return True" branch (line ~252) lets every thread re-claim the
+        # same task. We track in-flight srcs in memory and skip them at
+        # claim time. mark_done / mark_failed / _release_claim clear it.
+        self._in_flight = set()
+        self._in_flight_lock = threading.Lock()
 
     # ── 文件锁（本地进程间有效；SMB/NFS 下尽力而为）────────────────
     def _acquire(self):
@@ -271,6 +279,12 @@ class TaskQueue:
     def _release_claim(self, src: str) -> None:
         try: self._claim_path(src).unlink(missing_ok=True)
         except Exception: pass
+        # Drop in-process tracking — both mark_done and mark_failed call
+        # us, so this single cleanup covers both terminal paths.
+        try:
+            with self._in_flight_lock:
+                self._in_flight.discard(src)
+        except Exception: pass
 
     # ── per-task 失败标记（不碰主 JSON）────────────────────────────
     def _fail_hash(self, src: str) -> str:
@@ -442,9 +456,17 @@ class TaskQueue:
                     # 达到最大重试次数 → 视为永久失败，跳过
                     if self._fail_count(src) >= 3:
                         continue
+                    # In-process dedupe: when multi-worker in one process,
+                    # all threads share worker_id. Skip srcs another thread
+                    # in this process already claimed.
+                    with self._in_flight_lock:
+                        if src in self._in_flight:
+                            continue
                     # 跨机原子 claim（若被别人抢走或自己已 claim，返回 False）
                     if not self._try_claim_file(src):
                         continue
+                    with self._in_flight_lock:
+                        self._in_flight.add(src)
                     return src, "", 0
                 return None
             except Exception as e:
