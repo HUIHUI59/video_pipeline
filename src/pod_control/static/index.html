@@ -12,8 +12,7 @@
     <nav>
       <button data-tab="prepare" class="active">Prepare</button>
       <button data-tab="pods">Pods</button>
-      <button data-tab="run">Run</button>
-      <button data-tab="monitor">Monitor</button>
+      <button data-tab="run">Run &amp; Monitor</button>
     </nav>
   </header>
 
@@ -196,9 +195,60 @@
         <div id="run-reset-hint" class="run-reset-hint"></div>
       </section>
 
-      <section class="panel">
-        <h2>Active run</h2>
-        <div id="active-run-panel" class="muted">none</div>
+      <!-- Merged Active session: was the separate Monitor tab. -->
+      <section class="panel" id="active-session-panel">
+        <div class="panel-header-row">
+          <h2>Active session <small class="muted" id="monitor-status"></small></h2>
+          <div class="panel-header-actions">
+            <button id="monitor-pull-btn" class="btn-secondary" disabled>Pull results</button>
+          </div>
+        </div>
+        <div id="active-run-panel" class="muted">no active run</div>
+        <div id="monitor-summary" hidden></div>
+
+        <div id="monitor-stages-panel" hidden>
+          <div class="stage-stepper" id="monitor-stage-stepper">
+            <div class="stage-step" data-stage="push">
+              <span class="stage-icon">⏳</span>
+              <span class="stage-label">Push</span>
+            </div>
+            <div class="stage-sep">→</div>
+            <div class="stage-step" data-stage="run">
+              <span class="stage-icon">⏳</span>
+              <span class="stage-label">Run</span>
+            </div>
+            <div class="stage-sep">→</div>
+            <div class="stage-step" data-stage="pull">
+              <span class="stage-icon">⏳</span>
+              <span class="stage-label">Pull</span>
+            </div>
+            <div class="stage-sep">→</div>
+            <div class="stage-step" data-stage="done">
+              <span class="stage-icon">⏳</span>
+              <span class="stage-label">Done</span>
+            </div>
+          </div>
+
+          <div id="monitor-inference-progress" hidden>
+            <div class="progress-bar-wrap">
+              <div class="progress-bar-fill" id="monitor-progress-fill"></div>
+            </div>
+            <div class="progress-stats" id="monitor-progress-stats"></div>
+          </div>
+        </div>
+
+        <div id="monitor-log-block" hidden>
+          <div class="log-header">
+            <span class="muted">Log <small>(stdout, 2s polling)</small></span>
+            <span class="log-header-spacer"></span>
+            <label>
+              <input type="checkbox" id="monitor-autoscroll" checked />
+              auto-scroll
+            </label>
+            <span id="monitor-offset" class="muted">offset 0</span>
+          </div>
+          <pre id="monitor-log"></pre>
+        </div>
       </section>
 
       <section class="panel">
@@ -212,59 +262,6 @@
         <input type="search" id="history-search" class="search-input"
                placeholder="filter by id / batch / pod…" />
         <ul id="run-history" class="list"></ul>
-      </section>
-    </section>
-    <section id="tab-monitor" class="tab">
-      <section class="panel">
-        <div class="monitor-header-row">
-          <h2>Active run <small class="muted" id="monitor-status"></small></h2>
-          <button id="monitor-pull-btn" class="btn-secondary" disabled>Pull results</button>
-        </div>
-        <div id="monitor-summary" class="muted">no active run</div>
-      </section>
-
-      <section class="panel" id="monitor-stages-panel" hidden>
-        <h2>Pipeline progress</h2>
-        <div class="stage-stepper" id="monitor-stage-stepper">
-          <div class="stage-step" data-stage="push">
-            <span class="stage-icon">⏳</span>
-            <span class="stage-label">Push</span>
-          </div>
-          <div class="stage-sep">→</div>
-          <div class="stage-step" data-stage="run">
-            <span class="stage-icon">⏳</span>
-            <span class="stage-label">Run</span>
-          </div>
-          <div class="stage-sep">→</div>
-          <div class="stage-step" data-stage="pull">
-            <span class="stage-icon">⏳</span>
-            <span class="stage-label">Pull</span>
-          </div>
-          <div class="stage-sep">→</div>
-          <div class="stage-step" data-stage="done">
-            <span class="stage-icon">⏳</span>
-            <span class="stage-label">Done</span>
-          </div>
-        </div>
-
-        <div id="monitor-inference-progress" hidden>
-          <div class="progress-bar-wrap">
-            <div class="progress-bar-fill" id="monitor-progress-fill"></div>
-          </div>
-          <div class="progress-stats" id="monitor-progress-stats"></div>
-        </div>
-      </section>
-
-      <section class="panel">
-        <h2>Log <small class="muted">(stdout, 2s polling)</small></h2>
-        <div class="log-header">
-          <label>
-            <input type="checkbox" id="monitor-autoscroll" checked />
-            auto-scroll
-          </label>
-          <span id="monitor-offset" class="muted">offset 0</span>
-        </div>
-        <pre id="monitor-log"></pre>
       </section>
     </section>
   </main>

@@ -27,6 +27,90 @@ from .store import Batch, FilterParams, PodProfile, Store, StoreError
 
 _CLIP_CHUNK = 1 << 20  # 1 MiB
 
+# In-memory job registry for async batch exports. Keyed by job_id (uuid).
+# Each value is a dict the GET /api/exports/{job_id} endpoint returns
+# verbatim. The worker thread mutates it under _EXPORT_JOBS_LOCK.
+import threading as _threading
+_EXPORT_JOBS: dict[str, dict] = {}
+_EXPORT_JOBS_LOCK = _threading.Lock()
+
+
+def _export_worker(job_id: str, dest: Path, selected: list,
+                   batch_obj, overwrite: bool, output_root: Path) -> None:
+    """Background thread: copy clips + write manifest subset + batch.json."""
+    import shutil
+    from collections import defaultdict
+    per_movie: dict[str, list] = defaultdict(list)
+    for movie, entry in selected:
+        per_movie[movie].append(entry)
+
+    clips_root = dest / "clips"
+    manifest_out = dest / "manifest"
+    clips_root.mkdir(exist_ok=True)
+    manifest_out.mkdir(exist_ok=True)
+
+    copied = skipped = missing = 0
+    errors: list[str] = []
+    current = 0
+    total = len(selected)
+
+    for movie, entries in per_movie.items():
+        mdir = clips_root / movie
+        mdir.mkdir(exist_ok=True)
+        with (manifest_out / f"{movie}.jsonl").open("w", encoding="utf-8") as mf:
+            for e in entries:
+                mf.write(e.model_dump_json() + "\n")
+        for e in entries:
+            current += 1
+            with _EXPORT_JOBS_LOCK:
+                _EXPORT_JOBS[job_id]["current"] = current
+            src = (output_root / e.path).resolve() if not Path(e.path).is_absolute() \
+                  else Path(e.path)
+            if not src.is_file():
+                missing += 1
+                errors.append(f"missing source: {src}")
+                continue
+            dst = mdir / src.name
+            if dst.is_file() and not overwrite:
+                skipped += 1
+                continue
+            try:
+                shutil.copy2(src, dst)
+                copied += 1
+            except Exception as ex:
+                errors.append(f"{src.name}: {ex}")
+            with _EXPORT_JOBS_LOCK:
+                j = _EXPORT_JOBS[job_id]
+                j["copied"] = copied
+                j["skipped_existing"] = skipped
+                j["missing_source"] = missing
+
+    fp = batch_obj.filter_params
+    (dest / "batch.json").write_text(
+        batch_obj.model_dump_json(indent=2), encoding="utf-8"
+    )
+    (dest / "README.md").write_text(
+        f"# Exported batch: {batch_obj.name}\n\n"
+        f"Movies: {', '.join(batch_obj.movies)}\n\n"
+        f"Filter:\n```json\n{fp.model_dump_json(indent=2)}\n```\n\n"
+        f"Layout:\n"
+        f"- `batch.json` — full batch definition\n"
+        f"- `manifest/<movie>.jsonl` — only the shots in this batch\n"
+        f"- `clips/<movie>/*.mp4` — the actual video clips\n\n"
+        f"Stats: copied={copied} skipped_existing={skipped}"
+        f" missing_source={missing}\n",
+        encoding="utf-8",
+    )
+    with _EXPORT_JOBS_LOCK:
+        j = _EXPORT_JOBS[job_id]
+        j["status"] = "done"
+        j["ended_at"] = time.time()
+        j["copied"] = copied
+        j["skipped_existing"] = skipped
+        j["missing_source"] = missing
+        j["errors"] = errors[:50]
+        j["movies"] = list(per_movie.keys())
+
 
 class ConfigPutBody(BaseModel):
     raw_yaml: str | None = None
@@ -375,11 +459,10 @@ def create_app(
         store.save_batch(b, overwrite=True)
         return b.model_dump()
 
-    @app.post("/api/batches/{name}/export")
+    @app.post("/api/batches/{name}/export", status_code=202)
     def export_batch(name: str, body: ExportBatchBody) -> dict:
-        """Copy all clips matched by this batch's filter to dest_path,
-        organized by movie. Also writes a manifest subset + batch.json
-        + README.md so the recipient has everything they need.
+        """Kick off an async export. Returns immediately with job_id;
+        client polls GET /api/exports/{job_id} for progress.
         """
         b = store.get_batch(name)
         if b is None:
@@ -390,7 +473,6 @@ def create_app(
             raise _err("no_output_root",
                        "no output_root configured", status=400)
 
-        # Validate destination path: absolute, not a system root.
         dest = Path(body.dest_path).expanduser()
         if not dest.is_absolute():
             raise _err("invalid_dest",
@@ -408,27 +490,22 @@ def create_app(
             raise _err("invalid_dest",
                        f"dest_path may not be a system root: {dest_resolved}",
                        status=400)
-        # Block writing exactly to output_root itself or to its source
-        # subdirs (clips/labels/manifest) where we'd overwrite originals.
-        # Sibling paths under the same parent are fine — that's the common
-        # "share to another folder on the same disk" use case.
         try:
             out_resolved = out.resolve()
             if dest_resolved == out_resolved:
                 raise _err("invalid_dest",
-                           f"dest_path equals current output_root ({out_resolved}); "
-                           "pick a different folder to avoid overwriting source clips",
+                           f"dest_path equals current output_root ({out_resolved})",
                            status=400)
             for sub in ("clips", "labels", "manifest"):
                 if dest_resolved == out_resolved / sub:
                     raise _err("invalid_dest",
                                f"dest_path equals output_root/{sub}; "
-                               "this would overwrite source data",
+                               "would overwrite source data",
                                status=400)
         except FileNotFoundError:
             pass
 
-        # Filter shots using the batch's saved filter_params + movies.
+        # Run filtering synchronously (cheap; gives total upfront).
         from src.runpod.upload import _iter_manifest_lines, _filter_entries
         manifest_dir = out / "manifest"
         if not manifest_dir.is_dir():
@@ -440,85 +517,51 @@ def create_app(
         fp = b.filter_params
         selected = _filter_entries(
             all_entries,
-            categories=fp.categories,
-            max_shots=fp.max_shots,
+            categories=fp.categories, max_shots=fp.max_shots,
             skip_bad_quality=fp.skip_bad_quality,
             skip_landscape=fp.skip_landscape,
             min_duration_sec=fp.min_duration_sec,
             max_duration_sec=fp.max_duration_sec,
         )
-
-        # Prepare destination layout.
         dest_resolved.mkdir(parents=True, exist_ok=True)
-        clips_root = dest_resolved / "clips"
-        manifest_out_dir = dest_resolved / "manifest"
-        clips_root.mkdir(exist_ok=True)
-        manifest_out_dir.mkdir(exist_ok=True)
 
-        import shutil
-        from collections import defaultdict
-        per_movie: dict[str, list] = defaultdict(list)
-        for movie, entry in selected:
-            per_movie[movie].append(entry)
+        import uuid
+        job_id = uuid.uuid4().hex
+        with _EXPORT_JOBS_LOCK:
+            _EXPORT_JOBS[job_id] = {
+                "id": job_id, "batch_name": b.name,
+                "dest": str(dest_resolved),
+                "status": "running", "started_at": time.time(),
+                "ended_at": None,
+                "total": len(selected), "current": 0,
+                "copied": 0, "skipped_existing": 0, "missing_source": 0,
+                "movies": [], "errors": [],
+            }
+        # Cap registry size: drop oldest finished jobs once > 20.
+        with _EXPORT_JOBS_LOCK:
+            done_ids = sorted(
+                (j["id"] for j in _EXPORT_JOBS.values() if j["status"] != "running"),
+                key=lambda jid: _EXPORT_JOBS[jid].get("ended_at") or 0,
+            )
+            for jid in done_ids[:-20]:
+                _EXPORT_JOBS.pop(jid, None)
 
-        copied = 0
-        skipped_existing = 0
-        missing_source = 0
-        errors: list[str] = []
+        _threading.Thread(
+            target=_export_worker,
+            args=(job_id, dest_resolved, selected, b, body.overwrite, out),
+            daemon=True,
+        ).start()
+        return {"job_id": job_id, "total": len(selected),
+                "dest": str(dest_resolved)}
 
-        for movie, entries in per_movie.items():
-            mdir = clips_root / movie
-            mdir.mkdir(exist_ok=True)
-            # Manifest subset for this movie.
-            mf_path = manifest_out_dir / f"{movie}.jsonl"
-            with mf_path.open("w", encoding="utf-8") as mf:
-                for e in entries:
-                    mf.write(e.model_dump_json() + "\n")
-            # Copy each clip.
-            for e in entries:
-                src_clip = (out / e.path).resolve() if not Path(e.path).is_absolute() \
-                           else Path(e.path)
-                if not src_clip.is_file():
-                    missing_source += 1
-                    errors.append(f"missing source: {src_clip}")
-                    continue
-                dst_clip = mdir / src_clip.name
-                if dst_clip.is_file() and not body.overwrite:
-                    skipped_existing += 1
-                    continue
-                try:
-                    shutil.copy2(src_clip, dst_clip)
-                    copied += 1
-                except Exception as ex:
-                    errors.append(f"{src_clip.name}: {ex}")
-
-        # Drop a batch.json + README.md so the recipient has full context.
-        (dest_resolved / "batch.json").write_text(
-            b.model_dump_json(indent=2), encoding="utf-8"
-        )
-        readme = (
-            f"# Exported batch: {b.name}\n\n"
-            f"Movies: {', '.join(b.movies)}\n\n"
-            f"Filter:\n```json\n{fp.model_dump_json(indent=2)}\n```\n\n"
-            f"Layout:\n"
-            f"- `batch.json` — full batch definition\n"
-            f"- `manifest/<movie>.jsonl` — only the shots in this batch\n"
-            f"- `clips/<movie>/*.mp4` — the actual video clips\n\n"
-            f"Stats: copied={copied} skipped_existing={skipped_existing}"
-            f" missing_source={missing_source}\n"
-        )
-        (dest_resolved / "README.md").write_text(readme, encoding="utf-8")
-
-        return {
-            "ok": True,
-            "dest": str(dest_resolved),
-            "movies": list(per_movie.keys()),
-            "selected": len(selected),
-            "copied": copied,
-            "skipped_existing": skipped_existing,
-            "missing_source": missing_source,
-            "errors": errors[:20],   # cap to avoid huge response
-        }
+    @app.get("/api/exports/{job_id}")
+    def get_export(job_id: str) -> dict:
+        with _EXPORT_JOBS_LOCK:
+            job = _EXPORT_JOBS.get(job_id)
+            if job is None:
+                raise _err("export_not_found",
+                           f"no export job {job_id!r}", status=404)
+            return dict(job)   # shallow copy
 
     # ── M4 Pods ---------------------------------------------------------
 

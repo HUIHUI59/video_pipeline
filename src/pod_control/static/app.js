@@ -721,25 +721,28 @@ function _renderResetHint(batches) {
 }
 
 function renderActive(active) {
+  // The Run+Monitor merge moved active-run details into #monitor-summary
+  // (rendered by monitorInit). Here we just toggle the placeholder line
+  // and wire up the kill button.
   const panel = $("#active-run-panel");
   const killBtn = $("#run-kill-btn");
   if (!active) {
-    panel.innerHTML = `<span class="muted">none</span>`;
+    panel.textContent = "no active run";
+    panel.classList.add("muted");
     killBtn.disabled = true;
     killBtn.dataset.runId = "";
+    // Trigger monitorInit to clear the merged view too.
+    monitorInit?.();
     return;
   }
-  panel.innerHTML = `
-    <dl class="run-meta">
-      <div><dt>id</dt><dd>${active.id}</dd></div>
-      <div><dt>batch</dt><dd>${active.batch_name}</dd></div>
-      <div><dt>pod</dt><dd>${active.pod_name}</dd></div>
-      <div><dt>status</dt><dd class="run-status ${active.status}">${active.status}</dd></div>
-      <div><dt>pid</dt><dd>${active.pid ?? "—"}</dd></div>
-      <div><dt>started</dt><dd>${fmtEpoch(active.started_at)}</dd></div>
-    </dl>`;
+  panel.textContent = "";
+  panel.classList.remove("muted");
   killBtn.disabled = false;
   killBtn.dataset.runId = active.id;
+  // Make sure the monitor view stays in sync as state changes.
+  if (typeof monitorInit === "function" && monitorState.runId !== active.id) {
+    monitorInit();
+  }
 }
 
 function renderHistory(history) {
@@ -861,12 +864,14 @@ $("#clear-history-btn").addEventListener("click", async () => {
 });
 
 // Refresh the selectors + poll whenever user switches to the Run tab.
+// Run tab now also includes the merged Monitor view, so init that too.
 document
   .querySelector('nav button[data-tab="run"]')
   .addEventListener("click", async () => {
     await populateRunSelectors();
     await refreshRuns();
     startRunPolling();
+    await monitorInit();
   });
 
 // Refresh the direct-launch pod dropdown whenever user re-enters Prepare.
@@ -977,11 +982,16 @@ async function monitorInit() {
     const run = active_run || runs.history?.[0] || null;
 
     const pullBtn = $("#monitor-pull-btn");
+    const summary = $("#monitor-summary");
+    const stagesPanel = $("#monitor-stages-panel");
+    const logBlock = $("#monitor-log-block");
     if (!run) {
-      $("#monitor-summary").innerHTML = `<span class="muted">no active run</span>`;
+      // No active or recent run — keep just the placeholder line.
+      if (summary) { summary.hidden = true; summary.innerHTML = ""; }
       $("#monitor-status").textContent = "";
       $("#monitor-log").textContent = "";
-      $("#monitor-stages-panel").hidden = true;
+      if (stagesPanel) stagesPanel.hidden = true;
+      if (logBlock) logBlock.hidden = true;
       monitorState.runId = null;
       monitorState.localOffset = 0;
       monitorState.accLog = "";
@@ -1001,18 +1011,22 @@ async function monitorInit() {
     pullBtn.dataset.runId = run.id;
 
     $("#monitor-log").textContent = "";
-    $("#monitor-stages-panel").hidden = false;
+    if (stagesPanel) stagesPanel.hidden = false;
+    if (logBlock) logBlock.hidden = false;
     const isActive = active_run && active_run.id === run.id;
-    const statusLabel = isActive ? run.status : `${run.status} (detached, pod may still be running)`;
-    $("#monitor-summary").innerHTML = `
-      <dl class="run-meta">
-        <div><dt>id</dt><dd>${run.id}</dd></div>
-        <div><dt>batch</dt><dd>${run.batch_name}</dd></div>
-        <div><dt>pod</dt><dd>${run.pod_name}</dd></div>
-        <div><dt>status</dt><dd class="run-status ${run.status}">${statusLabel}</dd></div>
-        <div><dt>pid</dt><dd>${run.pid ?? "—"}</dd></div>
-        <div><dt>started</dt><dd>${fmtEpoch(run.started_at)}</dd></div>
-      </dl>`;
+    const statusLabel = isActive ? run.status : `${run.status} (detached)`;
+    if (summary) {
+      summary.hidden = false;
+      summary.innerHTML = `
+        <dl class="run-meta">
+          <div><dt>id</dt><dd>${run.id}</dd></div>
+          <div><dt>batch</dt><dd>${run.batch_name}</dd></div>
+          <div><dt>pod</dt><dd>${run.pod_name}</dd></div>
+          <div><dt>status</dt><dd class="run-status ${run.status}">${statusLabel}</dd></div>
+          <div><dt>pid</dt><dd>${run.pid ?? "—"}</dd></div>
+          <div><dt>started</dt><dd>${fmtEpoch(run.started_at)}</dd></div>
+        </dl>`;
+    }
 
     await monitorPoll();
     // Always keep polling: even detached runs can be tracked via pod-direct.
@@ -1095,10 +1109,6 @@ $("#monitor-pull-btn").addEventListener("click", async () => {
   }, 2000);
 });
 
-document
-  .querySelector('nav button[data-tab="monitor"]')
-  .addEventListener("click", monitorInit);
-
 // ── Output-root setting ─────────────────────────────────────────────
 
 async function loadOutputRoot() {
@@ -1172,6 +1182,12 @@ async function loadPresets() {
       const label = p.model ? `${p.name} — ${p.model}` : p.name;
       return `<option value="${p.name}">${label}</option>`;
     }).join("");
+    // Default to the 32B preset (Qwen3-VL-32B-Instruct) if present.
+    const defaultPreset = _presets.find(
+      (p) => p.name === "runpod.yaml"
+          || (p.model && p.model.includes("Qwen3-VL-32B"))
+    );
+    if (defaultPreset) sel.value = defaultPreset.name;
     _onPresetChange();
   } catch (err) {
     sel.innerHTML = `<option value="">${err.message}</option>`;
@@ -1199,6 +1215,49 @@ function _onPresetChange() {
 
 const _PRESET_TYPE_LIST = "list_csv";    // sentinel for list-of-strings inputs
 
+// Tooltip text for each yaml dot-path. Shown via title attribute on hover.
+const _PRESET_TOOLTIPS = {
+  // model.*
+  "model.name":                       "VLM model id (HuggingFace name). Default: Qwen3-VL-32B-Instruct",
+  "model.precision":                  "Weight precision: bf16 (~64GB) | fp8 (~35GB) | awq | awq_marlin | gptq-int4",
+  "model.quantization":               "vLLM quantization scheme; usually null — auto-detected from weights",
+  "model.path":                       "Local pre-downloaded model dir (skips HuggingFace download). null = pull from hub",
+  "model.max_model_len":              "Max input+output token budget per request. Larger = more context but more KV cache memory",
+  "model.gpu_memory_utilization":     "Fraction of GPU VRAM vLLM may use (0.85-0.95 typical; raising it gives more KV cache headroom)",
+  "model.tensor_parallel_size":       "GPUs to split the model across (1 = single GPU; 2-4 for 122B)",
+  "model.enforce_eager":              "Disable CUDA graph capture. true = saves 2-3GB VRAM but ~10-15% slower",
+  "model.max_num_seqs":               "Max concurrent vLLM requests. Small batches: 2-4 enough; default 256 over-reserves KV",
+  "model.limit_mm_per_prompt.image":  "Max image inputs per prompt (video frames are also images)",
+  "model.limit_mm_per_prompt.video":  "Max video inputs per prompt (usually 1)",
+  // sampling.* — generation
+  "sampling.temperature":             "Sampling temperature (0 = greedy, 0.2 = balanced, 1.0 = creative)",
+  "sampling.top_p":                   "Nucleus sampling threshold (top tokens summing to p)",
+  "sampling.repetition_penalty":      "Penalty for repeated tokens (1 = off, 1.05 = mild)",
+  "sampling.max_tokens":              "Default per-request output token budget (legacy single-round path)",
+  "sampling.max_tokens_round1":       "Round 1 (per-person body) output budget (typical 4096)",
+  "sampling.max_tokens_round2":       "Round 2 (persons + face crops) output budget (typical 8192)",
+  "sampling.max_tokens_round3":       "Round 3 (scene description) output budget (typical 3072)",
+  // sampling.* — video
+  "sampling.video_mode":              "true = send video URL to vLLM (uses native sampling); false = pre-extract frames",
+  "sampling.video_fps":               "Sample rate for vLLM internal frame extraction (Qwen3-VL default: 2; 8 = high temporal detail)",
+  "sampling.video_max_pixels":        "Max pixels per video frame (336×336 = 112896, controls token count per frame)",
+  "sampling.video_min_pixels":        "Min pixels per video frame (224×224 = 50176)",
+  // sampling.* — face
+  "sampling.face_crop_enabled":       "Detect + crop faces locally and feed to Round 2 for finer facial detail",
+  "sampling.face_crop_size":          "Face crop output size in pixels",
+  "sampling.face_crop_per_frame_max": "Max face crops per frame (default 2; lower if R2 output gets truncated)",
+  "sampling.face_crop_sample_fps":    "Sample rate for face crop extraction (separate from video_fps)",
+  "sampling.face_detector":           "Face detection backend (mediapipe / yolo / haar)",
+  // sampling.* — misc
+  "sampling.crowd_shot_max_persons":  "Skip Round 1 when person count exceeds this (avoids JSON overflow on crowd shots)",
+  "sampling.frames_single_dominant":  "Frame count to extract for single/dominant shot categories (legacy frame-mode path)",
+  "sampling.frames_multi_wide":       "Frame count to extract for multi/wide shot categories",
+  "sampling.resize_shortest":         "Resize shortest edge to this many pixels before encoding",
+  "sampling.disable_structured_output": "Skip vLLM JSON schema enforcement (true = faster but no schema guarantee)",
+  "sampling.disable_schema_validation": "Skip Pydantic validation on pod side (true = capture raw output for debugging)",
+  "pipeline.rounds":                  "Number of inference rounds per shot (default 3: scene → persons+face → per-person body)",
+};
+
 /** Build form rows recursively from a parsed yaml dict. Each leaf becomes
  *  an input whose data-path/data-type drives _collectConfigForm later. */
 function _renderConfigSection(parent, key, value, path, depth) {
@@ -1225,7 +1284,11 @@ function _renderConfigSection(parent, key, value, path, depth) {
   row.className = "config-field";
   const lbl = document.createElement("label");
   lbl.textContent = key;
-  lbl.title = path.join(".");
+  const dotPath = path.join(".");
+  // Title shows tooltip on hover; falls back to dot-path so user always
+  // knows what they're editing.
+  lbl.title = _PRESET_TOOLTIPS[dotPath] || dotPath;
+  if (_PRESET_TOOLTIPS[dotPath]) lbl.classList.add("has-tooltip");
   row.appendChild(lbl);
 
   let input;
@@ -1439,7 +1502,7 @@ function _toggleExportPanel(batchLi, batch) {
     const resultEl = panel.querySelector(".export-inline-result");
     if (!dest) { msgEl.textContent = "destination path required"; return; }
     goBtn.disabled = true;
-    msgEl.textContent = "exporting… (may take a while)";
+    msgEl.textContent = "starting…";
     resultEl.innerHTML = "";
     try {
       const r = await fetch(
@@ -1456,19 +1519,54 @@ function _toggleExportPanel(batchLi, batch) {
         goBtn.disabled = false;
         return;
       }
-      msgEl.textContent = "done";
-      const errs = (body.errors || []).slice(0, 5)
-        .map((x) => `<li>${_escapeHtml(x)}</li>`).join("");
+      const jobId = body.job_id;
+      const total = body.total;
+      msgEl.textContent = `exporting 0 / ${total}…`;
       resultEl.innerHTML = `
-        <div class="export-stats">
-          <div><dt>copied</dt><dd>${body.copied}</dd></div>
-          <div><dt>skipped (existing)</dt><dd>${body.skipped_existing}</dd></div>
-          <div><dt>missing source</dt><dd>${body.missing_source}</dd></div>
-          <div><dt>movies</dt><dd>${body.movies.length}</dd></div>
+        <div class="export-progress">
+          <div class="progress-bar-wrap">
+            <div class="progress-bar-fill" style="width:0%"></div>
+          </div>
+          <div class="export-progress-stats muted">starting…</div>
         </div>
-        <div class="muted export-dest">→ ${_escapeHtml(body.dest)}</div>
-        ${errs ? `<details><summary class="muted">${body.errors.length} error(s)</summary><ul>${errs}</ul></details>` : ""}
       `;
+      const fillEl = resultEl.querySelector(".progress-bar-fill");
+      const statsEl = resultEl.querySelector(".export-progress-stats");
+      // Poll progress.
+      let lastStatus = "running";
+      while (lastStatus === "running") {
+        await new Promise((res) => setTimeout(res, 600));
+        const sR = await fetch(`/api/exports/${jobId}`);
+        if (!sR.ok) {
+          msgEl.textContent = `progress poll HTTP ${sR.status}`;
+          goBtn.disabled = false;
+          return;
+        }
+        const s = await sR.json();
+        lastStatus = s.status;
+        const pct = s.total > 0 ? Math.round((s.current / s.total) * 100) : 0;
+        fillEl.style.width = `${pct}%`;
+        statsEl.textContent =
+          `${s.current} / ${s.total} (${pct}%) · ` +
+          `copied ${s.copied} · skipped ${s.skipped_existing} · missing ${s.missing_source}`;
+        msgEl.textContent = `exporting ${s.current} / ${s.total}…`;
+        if (lastStatus !== "running") {
+          fillEl.style.width = "100%";
+          msgEl.textContent = lastStatus === "done" ? "done" : `failed`;
+          const errs = (s.errors || []).slice(0, 5)
+            .map((x) => `<li>${_escapeHtml(x)}</li>`).join("");
+          resultEl.innerHTML = `
+            <div class="export-stats">
+              <div><dt>copied</dt><dd>${s.copied}</dd></div>
+              <div><dt>skipped (existing)</dt><dd>${s.skipped_existing}</dd></div>
+              <div><dt>missing source</dt><dd>${s.missing_source}</dd></div>
+              <div><dt>movies</dt><dd>${(s.movies || []).length}</dd></div>
+            </div>
+            <div class="muted export-dest">→ ${_escapeHtml(s.dest)}</div>
+            ${errs ? `<details><summary class="muted">${s.errors.length} error(s)</summary><ul>${errs}</ul></details>` : ""}
+          `;
+        }
+      }
       goBtn.disabled = false;
     } catch (err) {
       msgEl.textContent = err.message;

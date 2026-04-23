@@ -1450,3 +1450,51 @@ li.export-inline:hover { background: var(--bg-lift) !important; }
   font-size: 11px;
   font-style: italic;
 }
+
+/* ── Tooltip indicator on config field labels ────────────── */
+
+.config-field > label.has-tooltip {
+  cursor: help;
+  border-bottom: 1px dotted var(--muted);
+}
+
+/* ── Active session: log header polish ───────────────────── */
+
+#active-session-panel .log-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+  margin-top: 12px;
+}
+#active-session-panel .log-header-spacer { flex: 1; }
+#active-session-panel #monitor-log {
+  margin: 0;
+  max-height: 480px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px;
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+#active-run-panel { padding: 4px 0; }
+#monitor-summary { margin-top: 4px; }
+
+/* ── Export inline panel: live progress bar ──────────────── */
+
+.export-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.export-progress-stats {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
